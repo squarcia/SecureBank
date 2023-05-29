@@ -8,6 +8,8 @@
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/dh.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
 
 #define PORT	    8080
 #define MAXLINE     1024
@@ -93,6 +95,121 @@ int help_executor(char* arg) {
 void handle_error() {
     fprintf(stderr, "Error occurred\n");
     exit(1);
+}
+
+void generate_public_key() {
+    X509* cert = NULL;
+    EVP_PKEY* pubkey = NULL;
+    BIO* pubkey_bio = NULL;
+    FILE* pubkey_file = NULL;
+
+    // Load server's certificate from file
+    FILE* cert_file = fopen("../server/certificate.pem", "r");
+    if (cert_file == NULL) {
+        fprintf(stderr, "Error opening certificate file.\n");
+        goto cleanup;
+    }
+    cert = PEM_read_X509(cert_file, NULL, NULL, NULL);
+    fclose(cert_file);
+    if (cert == NULL) {
+        fprintf(stderr, "Error loading certificate.\n");
+        goto cleanup;
+    }
+
+    // Extract public key from the certificate
+    pubkey = X509_get_pubkey(cert);
+    if (pubkey == NULL) {
+        fprintf(stderr, "Error extracting public key.\n");
+        goto cleanup;
+    }
+
+    // Convert public key to PEM format
+    pubkey_bio = BIO_new(BIO_s_mem());
+    if (pubkey_bio == NULL) {
+        fprintf(stderr, "Error creating BIO for public key.\n");
+        goto cleanup;
+    }
+    if (PEM_write_bio_PUBKEY(pubkey_bio, pubkey) != 1) {
+        fprintf(stderr, "Error writing public key to BIO.\n");
+        goto cleanup;
+    }
+
+    // Store public key in a file
+    pubkey_file = fopen("../server/public_key.pem", "w");
+    if (pubkey_file == NULL) {
+        fprintf(stderr, "Error opening public key file.\n");
+        goto cleanup;
+    }
+    char buffer[4096];
+    int len;
+    while ((len = BIO_read(pubkey_bio, buffer, sizeof(buffer))) > 0) {
+        fwrite(buffer, 1, len, pubkey_file);
+    }
+
+    printf("Public key saved to public_key.pem\n");
+
+    cleanup:
+    if (pubkey_file) fclose(pubkey_file);
+    if (pubkey_bio) BIO_free(pubkey_bio);
+    if (pubkey) EVP_PKEY_free(pubkey);
+    if (cert) X509_free(cert);
+}
+
+// Function to generate a self-signed certificate
+X509* generateSelfSignedCertificate(EVP_PKEY* privateKey)
+{
+    X509* cert = X509_new();
+
+    // Set certificate version
+    X509_set_version(cert, 2);
+
+    // Generate random serial number for the certificate
+    ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
+
+    // Set certificate validity period
+    X509_gmtime_adj(X509_get_notBefore(cert), 0);
+    X509_gmtime_adj(X509_get_notAfter(cert), 31536000L); // 1 year validity
+
+    // Set the subject name of the certificate (e.g., common name, organization, etc.)
+    X509_NAME* name = X509_get_subject_name(cert);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char*)"Example Certificate", -1, -1, 0);
+
+    // Set the issuer name to be the same as the subject name for a self-signed certificate
+    X509_set_issuer_name(cert, name);
+
+    // Set the public key of the certificate
+    X509_set_pubkey(cert, privateKey);
+
+    // Sign the certificate with the private key
+    X509_sign(cert, privateKey, EVP_sha256());
+
+    return cert;
+}
+
+int generate_private_key_and_certificate() {
+
+    // Generate a new RSA private key
+    EVP_PKEY* privateKey = EVP_PKEY_new();
+    RSA* rsaKey = RSA_generate_key(2048, RSA_F4, NULL, NULL);
+    EVP_PKEY_assign_RSA(privateKey, rsaKey);
+
+    // Generate a self-signed certificate using the private key
+    X509* certificate = generateSelfSignedCertificate(privateKey);
+
+    // Write the private key to a file
+    FILE* privateKeyFile = fopen("../server/private_key.pem", "wb");
+    PEM_write_PrivateKey(privateKeyFile, privateKey, NULL, NULL, 0, NULL, NULL);
+    fclose(privateKeyFile);
+
+    // Write the certificate to a file
+    FILE* certificateFile = fopen("../server/certificate.pem", "wb");
+    PEM_write_X509(certificateFile, certificate);
+    fclose(certificateFile);
+
+    // Cleanup
+    EVP_PKEY_free(privateKey);
+    X509_free(certificate);
+    EVP_cleanup();
 }
 
 // Function to encrypt a message using AES-CBC with the shared secret as the key
@@ -448,6 +565,10 @@ int main() {
     // Set di socket attivi
     fd_set readfds;
 
+    // Genero la private key e il certificato del server
+    generate_private_key_and_certificate();
+    generate_public_key();
+
     // Creazione del master socket
     if ((master_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Errore nella creazione del socket");
@@ -579,4 +700,5 @@ int main() {
         }
     }
 }
+
 
