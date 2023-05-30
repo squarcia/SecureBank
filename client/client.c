@@ -31,7 +31,7 @@
 #define MAX_KEY_SIZE 2048
 #define MAX_MESSAGE_SIZE 1460
 #define HMAC_SIZE 32
-#define IV_SIZE 16
+#define NONCE_SIZE 16
 
 struct register_info {
 
@@ -534,8 +534,8 @@ void sendMessage(int socket, unsigned char *buffer, int buffer_len)
     }
 }
 
-void handle_error() {
-    fprintf(stderr, "Error occurred\n");
+void handle_error(const char* error_message) {
+    fprintf(stderr, "Error occurred: %s\n", error_message);
     exit(1);
 }
 
@@ -575,6 +575,16 @@ void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned c
     HMAC_CTX_free(ctx);
 }
 
+void print_hex(const unsigned char* data, size_t data_len, const unsigned char* title) {
+
+    printf("%s:\t", title);
+
+    for (size_t i = 0; i < data_len; i++) {
+        printf("%02X", data[i]);
+    }
+    printf("\n");
+}
+/*
 size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
     // Generate a random IV
     unsigned char iv[AES_BLOCK_SIZE];
@@ -654,6 +664,129 @@ size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, c
     // Provide the ciphertext to be decrypted
     int plaintext_len;
     if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - IV_SIZE - HMAC_SIZE) != 1) {
+        handle_error("Failed to decrypt ciphertext");
+    }
+
+    // Finalize the decryption operation
+    int final_len;
+    if (EVP_DecryptFinal_ex(ctx, plaintext + plaintext_len, &final_len) != 1) {
+        handle_error("Failed to finalize decryption operation");
+    }
+    plaintext_len += final_len;
+
+    // Clean up the decryption context
+    EVP_CIPHER_CTX_free(ctx);
+
+    return plaintext_len;
+}
+*/
+
+size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
+    // Generate a random IV
+    unsigned char iv[AES_BLOCK_SIZE];
+    if (RAND_bytes(iv, AES_BLOCK_SIZE) != 1) {
+        handle_error("Failed to generate IV");
+    }
+
+    // Generate a random nonce
+    unsigned char nonce[NONCE_SIZE];
+    if (RAND_bytes(nonce, NONCE_SIZE) != 1) {
+        handle_error("Failed to generate nonce");
+    }
+
+    // Create an encryption context
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        handle_error("Failed to create encryption context");
+    }
+
+    // Initialize the encryption operation with the IV
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+        handle_error("Failed to initialize encryption operation");
+    }
+
+    // Provide the plaintext to be encrypted
+    int ciphertext_len;
+    if (EVP_EncryptUpdate(ctx, ciphertext, &ciphertext_len, plaintext, plaintext_len) != 1) {
+        handle_error("Failed to encrypt plaintext");
+    }
+
+    // Finalize the encryption operation
+    int final_len;
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + ciphertext_len, &final_len) != 1) {
+        handle_error("Failed to finalize encryption operation");
+    }
+    ciphertext_len += final_len;
+
+    // Calculate HMAC for the ciphertext
+    unsigned char hmac[HMAC_SIZE];
+    calculate_hmac(ciphertext, ciphertext_len, key, key_len, hmac);
+
+    // Prepare the final message by concatenating IV, nonce, ciphertext, and HMAC
+    memcpy(ciphertext + ciphertext_len, iv, AES_BLOCK_SIZE);
+    ciphertext_len += AES_BLOCK_SIZE;
+    memcpy(ciphertext + ciphertext_len, nonce, NONCE_SIZE);
+    ciphertext_len += NONCE_SIZE;
+    memcpy(ciphertext + ciphertext_len, hmac, HMAC_SIZE);
+    ciphertext_len += HMAC_SIZE;
+
+    // Clean up the encryption context
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext_len;
+}
+
+void extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsigned char* iv, unsigned char* nonce, unsigned char* hmac) {
+    size_t iv_offset = ciphertext_len - 16 - NONCE_SIZE - HMAC_SIZE;
+    size_t nonce_offset = ciphertext_len - NONCE_SIZE - HMAC_SIZE;
+    size_t hmac_offset = ciphertext_len - HMAC_SIZE;
+
+    memcpy(iv, ciphertext + iv_offset, 16);
+    memcpy(nonce, ciphertext + nonce_offset, NONCE_SIZE);
+    memcpy(hmac, ciphertext + hmac_offset, HMAC_SIZE);
+}
+
+size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, const unsigned char* key, size_t key_len, unsigned char* plaintext) {
+
+    print_hex(ciphertext, ciphertext_len, "ENCRYPTED_TEXT");
+    // Extract the IV from the ciphertext
+    unsigned char iv[16];
+    // Extract the nonce from the ciphertext
+    unsigned char nonce[16];
+    // Extract the HMAC from the ciphertext
+    unsigned char hmac[32];
+
+    extract_values(ciphertext, ciphertext_len, iv, nonce, hmac);
+
+    print_hex(iv, strlen(iv), "IV");
+    print_hex(nonce, strlen(nonce), "NONCE");
+
+    // Calculate the expected HMAC of the ciphertext
+    unsigned char expected_hmac[32];
+    calculate_hmac(ciphertext, ciphertext_len - 16 - 16 - 32, key, key_len, expected_hmac);
+
+    print_hex(hmac, 32, "HMAC");
+    print_hex(expected_hmac, 32, "EXPECTED HMAC");
+
+    // Verify the HMAC
+    if (memcmp(hmac, expected_hmac, 32) != 0) {
+        handle_error("HMAC verification failed");
+    }
+
+    // Create a decryption context
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        handle_error("Failed to create decryption context");
+    }
+
+    // Initialize the decryption operation with the IV
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+        handle_error("Failed to initialize decryption operation");
+    }
+
+    // Provide the ciphertext to be decrypted
+    int plaintext_len;
+    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - 16 - 16 - 32) != 1) {
         handle_error("Failed to decrypt ciphertext");
     }
 
