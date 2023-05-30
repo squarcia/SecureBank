@@ -69,26 +69,26 @@ unsigned char* shared_secret;
 const char* valid_cmds[] = {"help", "showpeers", "showneighbor", "close", "esc"};
 
 const char* help_msg =
-    "\n\n****************************************** DS COVID ******************************************\n\n"
-    "               !help                  --> mostra il significato dei comandi e ciò che fanno\n"
-    "               !showpeers             --> mostra l’elenco dei peer connessi alla rete\n"
-    "               !showneighbor  <peer>  --> mostra i neighbor di un peer\n"
-    "               !close <peer>          --> chiude il register di un peer\n"
-    "               !esc                   --> termina il DS\n";
+        "\n\n****************************************** DS COVID ******************************************\n\n"
+        "               !help                  --> mostra il significato dei comandi e ciò che fanno\n"
+        "               !showpeers             --> mostra l’elenco dei peer connessi alla rete\n"
+        "               !showneighbor  <peer>  --> mostra i neighbor di un peer\n"
+        "               !close <peer>          --> chiude il register di un peer\n"
+        "               !esc                   --> termina il DS\n";
 
 
 const char* help_verbose_msg =
-    "\n\n\t=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=  HELP COMMAND SECTION =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n\n"
-    "\tSHOWPEERS:\t\t Mostra l'elenco completo dei peers connessi alla rete in modalità verbose\n\n"
-    "\tSHOWNEIGHBOR:\t\t Mostra i neighbor di un peer passato come parametro."
-    "\n\t\t\t\t Se non viene passato nessun parametro vengono mostrati"
-    "\n\t\t\t\t i neighbor di ogni peer. \n\n"
-    "\tCLOSE:\t\t\t provoca la chiusura del register del peer specificato come parametro.\n\n"
-    "\tESC:\t\t\t termina il DS. La terminazione del DS causa la terminazione"
-    "\n\t\t\t\t di tutti i peer."
-    "\n\t\t\t\t Opzionalmente, prima di chiudersi, i peer possono salvare"
-    "\n\t\t\t\t le loro informazioni su un file,"
-    "\n\t\t\t\t ricaricato nel momento in cui un peer torna a far parte del network.\n\n";
+        "\n\n\t=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=  HELP COMMAND SECTION =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n\n"
+        "\tSHOWPEERS:\t\t Mostra l'elenco completo dei peers connessi alla rete in modalità verbose\n\n"
+        "\tSHOWNEIGHBOR:\t\t Mostra i neighbor di un peer passato come parametro."
+        "\n\t\t\t\t Se non viene passato nessun parametro vengono mostrati"
+        "\n\t\t\t\t i neighbor di ogni peer. \n\n"
+        "\tCLOSE:\t\t\t provoca la chiusura del register del peer specificato come parametro.\n\n"
+        "\tESC:\t\t\t termina il DS. La terminazione del DS causa la terminazione"
+        "\n\t\t\t\t di tutti i peer."
+        "\n\t\t\t\t Opzionalmente, prima di chiudersi, i peer possono salvare"
+        "\n\t\t\t\t le loro informazioni su un file,"
+        "\n\t\t\t\t ricaricato nel momento in cui un peer torna a far parte del network.\n\n";
 
 int help_executor(char* arg) {
     printf("%s", help_verbose_msg);
@@ -525,7 +525,7 @@ int showpeers_executor(char* arg) {
         return 0;
     }
 
-   	while (current_node != NULL) {
+    while (current_node != NULL) {
 
         printf("\n\t\t\t\t\tPEER [  %d  ] \n", current_node->peer->port);
         current_node = current_node->next;
@@ -542,7 +542,7 @@ int showneighbor_executor(char* arg) {
 
     struct peer_list *current_node = peer_list;
 
-   	while (current_node != NULL) {
+    while (current_node != NULL) {
         if (current_node->peer->port == port) {
             trovato = 1;
             break;
@@ -603,11 +603,11 @@ int _parse_command(char* line, size_t line_len, char** cmd, char** arg){
 }
 
 cmd_executor executors[] = {
-    *help_executor,
-    *showpeers_executor,
-    *showneighbor_executor,
-    *close_executor,
-    *esc_executor
+        *help_executor,
+        *showpeers_executor,
+        *showneighbor_executor,
+        *close_executor,
+        *esc_executor
 };
 
 int process_command(const char* cmd, char* arg) {
@@ -647,7 +647,7 @@ int _handle_cmd() {
     }
 
     if (_parse_command(buf, buf_len, &cmd, &arg) == -1) {
-         /* line contains only '!' */
+        /* line contains only '!' */
         printf("Errore: comando non specificato\n");
         free(buf);
         return -1;
@@ -671,8 +671,8 @@ int main() {
 
     /* Buffer di ricezione/appoggio/appoggio */
     char bufferRicezione[MAXLINE],
-         bufferCopy[MAXLINE],
-         bufferNeighbor[MAXLINE];
+            bufferCopy[MAXLINE],
+            bufferNeighbor[MAXLINE];
 
     char *token;
 

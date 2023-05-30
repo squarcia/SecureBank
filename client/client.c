@@ -127,13 +127,13 @@ const char *types[] = {"TAMPONE", "NUOVO_CASO"};
 const char* valid_cmds[] = {"register", "login", "start", "add", "get", "stop"};
 
 const char* help_msg =
-    "\n\n   ****************************************** PEER ******************************************\n\n"
-    "\t!register    <DS_addr> <DS_port>          --> effettua la registrazione al network\n"
-    "\t!login       <DS_addr> <DS_port>          --> effettua il login al network\n"
-    "\t!start       <DS_addr> <DS_port>          --> effettua la connessione al network\n"
-    "\t!add         <type> <quantity>            --> aggiunge una tupla al register corrente\n"
-    "\t!get         <aggr> <type> <period>       --> effettua una richiesta di elaborazione\n"
-    "\t!stop                                     --> disconnette il peer dal network\n\n\n";
+        "\n\n   ****************************************** PEER ******************************************\n\n"
+        "\t!register    <DS_addr> <DS_port>          --> effettua la registrazione al network\n"
+        "\t!login       <DS_addr> <DS_port>          --> effettua il login al network\n"
+        "\t!start       <DS_addr> <DS_port>          --> effettua la connessione al network\n"
+        "\t!add         <type> <quantity>            --> aggiunge una tupla al register corrente\n"
+        "\t!get         <aggr> <type> <period>       --> effettua una richiesta di elaborazione\n"
+        "\t!stop                                     --> disconnette il peer dal network\n\n\n";
 
 void getData(char *buffer, int giorno_dopo) {
     time_t t = time(NULL);
@@ -204,7 +204,7 @@ void verifyTime(struct peer_info *peer, int chiusura_forzata) {
 
     */
 
-   if ((strcmp(current_node->data, today) == 0 && hours >= 00) || chiusura_forzata) {
+    if ((strcmp(current_node->data, today) == 0 && hours >= 00) || chiusura_forzata) {
 
         printf("\t\t\t\t      [  REGISTER CHIUSO  ]\n\n");
 
@@ -228,7 +228,7 @@ void verifyTime(struct peer_info *peer, int chiusura_forzata) {
         inserisciRegistro(register_item, peer);
 
         printf("\t\t\t\t   [  NUOVO REGISTER APERTO  ]\n\n\n\n");
-   }
+    }
 }
 
 int add_executor(char* arg, struct peer_info *peer) {
@@ -304,9 +304,9 @@ int stop_executor(char* arg, struct peer_info *peer) {
 int register_executor() {
 
     char *nome,
-         *cognome,
-         *username,
-         *password;
+            *cognome,
+            *username,
+            *password;
 
     int balance = 0;
 
@@ -335,8 +335,8 @@ int register_executor() {
 
     if (strcmp("Y", &answer) == 0 || strcmp("y", &answer) == 0) {
 
-       /* Scrivere il testo cifrato su file */
-       /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
+        /* Scrivere il testo cifrato su file */
+        /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
 
         const char *directory = "./registered";
         const char *filename = username;
@@ -765,13 +765,10 @@ int get_executor() {
     }
     printf("\n");
 
-    printf("Ciao");
-
     // Use the shared secret for further communication
 
     // Buffer to hold the encrypted message
     unsigned char encrypted_message[1024];
-
 
     // Buffer to hold the decrypted message
     unsigned char decrypted_message[1024];
@@ -784,10 +781,6 @@ int get_executor() {
 
     // Print the decrypted message
     printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
-
-    // Clean up
-    DH_free(dh);
-    BN_free(server_pub_key);
 
 }
 
@@ -1035,8 +1028,8 @@ int main() {
 
     /* Buffer di ricezione/appoggio/appoggio */
     char bufferRicezione[MAXLINE],
-         bufferCopy[MAXLINE],
-         bufferNeighbor[MAXLINE];
+            bufferCopy[MAXLINE],
+            bufferNeighbor[MAXLINE];
 
     /* Struttura indirizzo server/client */
     struct sockaddr_in my_addr, cl_addr;
@@ -1053,7 +1046,7 @@ int main() {
 
     fdmax = (server_sock > STDIN_FILENO) ? server_sock : STDIN_FILENO;
 
-     while(1) {
+    while(1) {
 
         print_help();
 
@@ -1075,7 +1068,7 @@ int main() {
 
                         unsigned char iv[KEY_LENGTH] = {0};
                         unsigned char plaintext[BUFFER_SIZE];
-                       // decryptMessage(bufferRicezione, strlen(bufferRicezione), shared_secret, iv, plaintext);
+                        // decryptMessage(bufferRicezione, strlen(bufferRicezione), shared_secret, iv, plaintext);
                         printf("Plaintext arrived: %s, Dimension: %d", plaintext, strlen(plaintext));
                         strcpy(bufferNeighbor, plaintext);
                     } else {
@@ -1088,7 +1081,7 @@ int main() {
                         break;
                     }
 
-                     if (atoi(bufferNeighbor) == 11) {
+                    if (atoi(bufferNeighbor) == 11) {
                         break;
                     }
                 }
