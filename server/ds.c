@@ -1,4 +1,3 @@
-// Server side implementation of UDP client-server model
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -95,6 +94,55 @@ int help_executor(char* arg) {
 void handle_error() {
     fprintf(stderr, "Error occurred\n");
     exit(1);
+}
+
+void sendPublicKey(int socket, EVP_PKEY* publicKey) {
+    // Ottieni la dimensione del buffer necessario per la serializzazione
+    int bufferSize = i2d_PUBKEY(publicKey, NULL);
+    if (bufferSize < 0) {
+        perror("Failed to get buffer size for public key");
+        return;
+    }
+
+    // Alloca il buffer per la serializzazione
+    unsigned char* buffer = (unsigned char*)malloc(bufferSize);
+    if (buffer == NULL) {
+        perror("Failed to allocate memory for public key serialization");
+        return;
+    }
+
+    // Serializza la chiave pubblica nel buffer
+    unsigned char* bufferPtr = buffer;
+    int result = i2d_PUBKEY(publicKey, &bufferPtr);
+    if (result < 0) {
+        perror("Failed to serialize public key");
+        free(buffer);
+        return;
+    }
+
+    // Invia i dati della chiave pubblica sul socket
+    result = send(socket, buffer, bufferSize, 0);
+    if (result < 0) {
+        perror("Failed to send public key");
+        free(buffer);
+        return;
+    }
+
+    free(buffer);
+}
+
+EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
+    EVP_PKEY* publicKey = NULL;
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    PEM_read_PUBKEY(file, &publicKey, NULL, NULL);
+
+    fclose(file);
+    return publicKey;
 }
 
 void generate_public_key() {
@@ -676,8 +724,28 @@ int main() {
 
                         printf("\n\n\t\t\t\t    [ NUOVO PEER NELLA RETE ]\n\n");
                         response = "\n\n\t\t\t\t    [ CONNECTED SUCCESSFULLY ]\n\n";
+
+                        // Invio la chiave pubblica in modo che il client possa verificare la mia identità
+                        const char* publicKeyFile = "../server/public_key.pem";
+                        EVP_PKEY* server_pubkey = readPublicKeyFromPEM(publicKeyFile);
+                        if (server_pubkey == NULL) {
+                            printf("Failed to read public key from file\n");
+                            return 1;
+                        }
+
+                        // Converti la chiave pubblica del server in formato PEM
+                        BIO* bio = BIO_new(BIO_s_mem());
+                        PEM_write_bio_PUBKEY(bio, server_pubkey);
+
+                        // Ottieni i dati dalla memoria BIO
+                        char* pubkey_data;
+                        size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
+
+                        sendPublicKey(sd, server_pubkey);
+                        printf("Public key sent!\n %s", pubkey_data);
+
                         // Invio della risposta al client
-                        send(sd, response, strlen(response), 0);
+                        //send(sd, response, strlen(response), 0);
                         break;
                     }
 
@@ -700,5 +768,4 @@ int main() {
         }
     }
 }
-
 

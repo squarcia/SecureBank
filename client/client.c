@@ -540,6 +540,20 @@ void handle_error() {
     exit(1);
 }
 
+EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
+    // Alloca un puntatore temporaneo per il buffer
+    unsigned char* bufferPtr = buffer;
+
+    // Converte i dati del buffer nella chiave pubblica
+    EVP_PKEY* publicKey = d2i_PUBKEY(NULL, (const unsigned char**)&bufferPtr, bufferSize);
+    if (publicKey == NULL) {
+        perror("Failed to convert data to public key");
+        return NULL;
+    }
+
+    return publicKey;
+}
+
 // Function to encrypt a message using AES-CBC with the shared secret as the key
 size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
     // Create an encryption context
@@ -795,6 +809,29 @@ int _handle_cmd(struct peer_info *peer) {
     return ris;
 }
 
+void printEvpKey(EVP_PKEY *key) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        // Error handling
+        return;
+    }
+
+    if (!PEM_write_bio_PUBKEY(bio, key)) {
+        // Error handling
+        BIO_free(bio);
+        return;
+    }
+
+    char *pubKeyStr = NULL;
+    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
+    if (pubKeyLen > 0) {
+        printf("Public Key:\n%s\n", pubKeyStr);
+    }
+
+    BIO_free(bio);
+}
+
+
 void startEngine(struct peer_info *peer, struct register_info *register_item,  struct sockaddr_in serv_addr) {
 
     char *message = "1:[ PEER CONNESSO CORRETTAMENTE ]";
@@ -835,8 +872,26 @@ void startEngine(struct peer_info *peer, struct register_info *register_item,  s
     send(server_sock, message, strlen(message), 0);
 
     // Lettura della risposta dal server
-    read(server_sock, buffer, BUFFER_SIZE);
-    printf("%s\n", buffer);
+    // In questo caso riceverò prima la chiave pubblica del server in modo da confrontare il certificato con essa
+    // e verificare l'identità del server
+
+    // Ricevi i dati della chiave pubblica dal server tramite il socket
+    unsigned char receivedBuffer[BUFFER_SIZE];  // Definisci la dimensione massima del buffer
+    int receivedSize = recv(server_sock, receivedBuffer, sizeof(receivedBuffer), 0);
+    //int receivedSize = read(server_sock, receivedBuffer, BUFFER_SIZE);
+    if (receivedSize <= 0) {
+        perror("Failed to receive public key");
+        return;
+    }
+
+    // Converti i dati ricevuti nella chiave pubblica del server
+    EVP_PKEY* serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
+    if (serverPublicKey == NULL) {
+        printf("Failed to convert received data to public key\n");
+        return;
+    }
+
+    printEvpKey(serverPublicKey);
 }
 
 int main() {
