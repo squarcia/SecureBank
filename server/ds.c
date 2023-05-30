@@ -9,6 +9,8 @@
 #include <openssl/dh.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/hmac.h>
 
 #define PORT	    8080
 #define MAXLINE     1024
@@ -16,6 +18,8 @@
 #define MAX_MESSAGE_SIZE 1460
 #define MAX_CLIENTS 5
 #define BUFFER_SIZE 1024
+#define HMAC_SIZE 32
+#define IV_SIZE 16
 
 #define COMMANDS 5
 #define COMMAND_PREFIX '!'
@@ -260,16 +264,43 @@ int generate_private_key_and_certificate() {
     EVP_cleanup();
 }
 
-// Function to encrypt a message using AES-CBC with the shared secret as the key
+void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned char* key, size_t key_len, unsigned char* hmac) {
+    HMAC_CTX* ctx = HMAC_CTX_new();
+    if (ctx == NULL) {
+        handle_error("Failed to create HMAC context");
+    }
+
+    if (HMAC_Init_ex(ctx, key, key_len, EVP_sha256(), NULL) != 1) {
+        handle_error("Failed to initialize HMAC");
+    }
+
+    if (HMAC_Update(ctx, data, data_len) != 1) {
+        handle_error("Failed to update HMAC");
+    }
+
+    unsigned int hmac_len = HMAC_SIZE;
+    if (HMAC_Final(ctx, hmac, &hmac_len) != 1) {
+        handle_error("Failed to finalize HMAC");
+    }
+
+    HMAC_CTX_free(ctx);
+}
+
 size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
+    // Generate a random IV
+    unsigned char iv[AES_BLOCK_SIZE];
+    if (RAND_bytes(iv, AES_BLOCK_SIZE) != 1) {
+        handle_error("Failed to generate IV");
+    }
+
     // Create an encryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         handle_error("Failed to create encryption context");
     }
 
-    // Initialize the encryption operation
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, NULL) != 1) {
+    // Initialize the encryption operation with the IV
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         handle_error("Failed to initialize encryption operation");
     }
 
@@ -289,25 +320,51 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, con
     // Clean up the encryption context
     EVP_CIPHER_CTX_free(ctx);
 
+    // Calculate HMAC for the ciphertext
+    unsigned char hmac[HMAC_SIZE];
+    calculate_hmac(ciphertext, ciphertext_len, key, key_len, hmac);
+
+    // Prepare the final message by concatenating IV, ciphertext, and HMAC
+    memcpy(ciphertext + ciphertext_len, iv, AES_BLOCK_SIZE);
+    ciphertext_len += AES_BLOCK_SIZE;
+    memcpy(ciphertext + ciphertext_len, hmac, HMAC_SIZE);
+    ciphertext_len += HMAC_SIZE;
+
     return ciphertext_len;
 }
 
-// Function to decrypt a ciphertext using AES-CBC with the shared secret as the key
 size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, const unsigned char* key, size_t key_len, unsigned char* plaintext) {
+    // Extract the IV from the ciphertext
+    unsigned char iv[AES_BLOCK_SIZE];
+    memcpy(iv, ciphertext + ciphertext_len - IV_SIZE - HMAC_SIZE, IV_SIZE);
+
+    // Extract the HMAC from the ciphertext
+    unsigned char hmac[HMAC_SIZE];
+    memcpy(hmac, ciphertext + ciphertext_len - HMAC_SIZE, HMAC_SIZE);
+
+    // Calculate the expected HMAC of the ciphertext
+    unsigned char expected_hmac[HMAC_SIZE];
+    calculate_hmac(ciphertext, ciphertext_len - IV_SIZE - HMAC_SIZE, key, key_len, expected_hmac);
+
+    // Verify the HMAC
+    if (memcmp(hmac, expected_hmac, HMAC_SIZE) != 0) {
+        handle_error("HMAC verification failed");
+    }
+
     // Create a decryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         handle_error("Failed to create decryption context");
     }
 
-    // Initialize the decryption operation
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, NULL) != 1) {
+    // Initialize the decryption operation with the IV
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         handle_error("Failed to initialize decryption operation");
     }
 
     // Provide the ciphertext to be decrypted
     int plaintext_len;
-    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len) != 1) {
+    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - IV_SIZE - HMAC_SIZE) != 1) {
         handle_error("Failed to decrypt ciphertext");
     }
 
@@ -324,7 +381,6 @@ size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, c
     return plaintext_len;
 }
 
-
 void sendMessage(int socket, unsigned char *buffer, int buffer_len)
 {
     int bytes_sent = send(socket, buffer, buffer_len, 0);
@@ -332,6 +388,13 @@ void sendMessage(int socket, unsigned char *buffer, int buffer_len)
     {
         perror("Error sending message");
         exit(1);
+    }
+}
+
+void generateIV(unsigned char* iv, size_t iv_len) {
+    if (RAND_bytes(iv, iv_len) != 1) {
+        perror("Failed to generate random IV");
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -429,20 +492,23 @@ void diffieHellman(int client_socket) {
 
     // Use the shared secret for further communication
 
+    // Message to be sent
+    const char* message = "Hello, client!";
+    size_t message_len = strlen(message);
+
+    // Buffer to hold the encrypted message
+    unsigned char encrypted_message[1024];
+    size_t encrypted_message_len;
+
+    // Buffer to hold the decrypted message
+    unsigned char decrypted_message[1024];
+    size_t decrypted_message_len;
+
 
     // Encrypt the message
-    const char* message = "Hello, client!";
-    unsigned char encrypted_message[MAX_MESSAGE_SIZE];  // Adjust the buffer size accordingly
-    size_t encrypted_message_len = encrypt_message(message, strlen(message), shared_secret, shared_secret_len, encrypted_message);
-    if (encrypted_message_len <= 0) {
-        handle_error("Failed to encrypt message");
-    }
+    encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, shared_secret, strlen((const char*)shared_secret), encrypted_message);
 
-    // Send the encrypted message to the client
-    if (send(client_socket, encrypted_message, encrypted_message_len, 0) == -1) {
-        handle_error("Failed to send encrypted message to client");
-    }
-
+    sendMessage(client_socket, encrypted_message, encrypted_message_len);
 
     // Clean up
     DH_free(dh);

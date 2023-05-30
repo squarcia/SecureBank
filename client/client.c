@@ -20,13 +20,18 @@
 #include <openssl/pem.h>
 #include <dirent.h>
 #include <openssl/aes.h>
-
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/rand.h>
+#include <openssl/hmac.h>
 
 #define BUFFER_SIZE 1024
 #define KEY_LENGTH 16
 #define BUFFER_SIZE 1024
 #define MAX_KEY_SIZE 2048
 #define MAX_MESSAGE_SIZE 1460
+#define HMAC_SIZE 32
+#define IV_SIZE 16
 
 struct register_info {
 
@@ -55,6 +60,12 @@ struct user {
     char *password;
 };
 
+struct server_info {
+    EVP_PKEY* serverPublicKey;
+    struct sockaddr_in serv_addr;
+    int server_sock;
+};
+
 struct socket_info {
     int socket;
     int peer_left;
@@ -68,7 +79,6 @@ struct map {
     int sent;
     int received;
 };
-
 
 typedef int (*cmd_executor)(char* arg, struct peer_info *peer);
 
@@ -153,17 +163,6 @@ void inserisciRegistro(struct register_info *item, struct peer_info *peer) {
     }
 
     numRegister++;
-}
-
-int start_executor(char* arg, struct peer_info *peer) {
-
-    // Start Diffie Hellman
-    unsigned char* buffer = "2: DIFFIE :)";
-    send(server_sock, buffer, strlen(buffer), 0);
-    //diffieHellmanKeys(peer);
-    //printSharedSecret(shared_secret, strlen(shared_secret));
-    crypted = 1;
-    return 1;
 }
 
 void verifyTime(struct peer_info *peer, int chiusura_forzata) {
@@ -554,16 +553,43 @@ EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
     return publicKey;
 }
 
-// Function to encrypt a message using AES-CBC with the shared secret as the key
+void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned char* key, size_t key_len, unsigned char* hmac) {
+    HMAC_CTX* ctx = HMAC_CTX_new();
+    if (ctx == NULL) {
+        handle_error("Failed to create HMAC context");
+    }
+
+    if (HMAC_Init_ex(ctx, key, key_len, EVP_sha256(), NULL) != 1) {
+        handle_error("Failed to initialize HMAC");
+    }
+
+    if (HMAC_Update(ctx, data, data_len) != 1) {
+        handle_error("Failed to update HMAC");
+    }
+
+    unsigned int hmac_len = HMAC_SIZE;
+    if (HMAC_Final(ctx, hmac, &hmac_len) != 1) {
+        handle_error("Failed to finalize HMAC");
+    }
+
+    HMAC_CTX_free(ctx);
+}
+
 size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
+    // Generate a random IV
+    unsigned char iv[AES_BLOCK_SIZE];
+    if (RAND_bytes(iv, AES_BLOCK_SIZE) != 1) {
+        handle_error("Failed to generate IV");
+    }
+
     // Create an encryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         handle_error("Failed to create encryption context");
     }
 
-    // Initialize the encryption operation
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, NULL) != 1) {
+    // Initialize the encryption operation with the IV
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         handle_error("Failed to initialize encryption operation");
     }
 
@@ -583,25 +609,51 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, con
     // Clean up the encryption context
     EVP_CIPHER_CTX_free(ctx);
 
+    // Calculate HMAC for the ciphertext
+    unsigned char hmac[HMAC_SIZE];
+    calculate_hmac(ciphertext, ciphertext_len, key, key_len, hmac);
+
+    // Prepare the final message by concatenating IV, ciphertext, and HMAC
+    memcpy(ciphertext + ciphertext_len, iv, AES_BLOCK_SIZE);
+    ciphertext_len += AES_BLOCK_SIZE;
+    memcpy(ciphertext + ciphertext_len, hmac, HMAC_SIZE);
+    ciphertext_len += HMAC_SIZE;
+
     return ciphertext_len;
 }
 
-// Function to decrypt a ciphertext using AES-CBC with the shared secret as the key
 size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, const unsigned char* key, size_t key_len, unsigned char* plaintext) {
+    // Extract the IV from the ciphertext
+    unsigned char iv[AES_BLOCK_SIZE];
+    memcpy(iv, ciphertext + ciphertext_len - IV_SIZE - HMAC_SIZE, IV_SIZE);
+
+    // Extract the HMAC from the ciphertext
+    unsigned char hmac[HMAC_SIZE];
+    memcpy(hmac, ciphertext + ciphertext_len - HMAC_SIZE, HMAC_SIZE);
+
+    // Calculate the expected HMAC of the ciphertext
+    unsigned char expected_hmac[HMAC_SIZE];
+    calculate_hmac(ciphertext, ciphertext_len - IV_SIZE - HMAC_SIZE, key, key_len, expected_hmac);
+
+    // Verify the HMAC
+    if (memcmp(hmac, expected_hmac, HMAC_SIZE) != 0) {
+        handle_error("HMAC verification failed");
+    }
+
     // Create a decryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         handle_error("Failed to create decryption context");
     }
 
-    // Initialize the decryption operation
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, NULL) != 1) {
+    // Initialize the decryption operation with the IV
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
         handle_error("Failed to initialize decryption operation");
     }
 
     // Provide the ciphertext to be decrypted
     int plaintext_len;
-    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len) != 1) {
+    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - IV_SIZE - HMAC_SIZE) != 1) {
         handle_error("Failed to decrypt ciphertext");
     }
 
@@ -713,26 +765,25 @@ int get_executor() {
     }
     printf("\n");
 
+    printf("Ciao");
+
     // Use the shared secret for further communication
-    // Receive the encrypted message from the server
-    unsigned char encrypted_message[MAX_MESSAGE_SIZE];  // Adjust the buffer size accordingly
-    int received_len = recv(server_sock, encrypted_message, sizeof(encrypted_message), 0);
-    if (received_len <= 0) {
-        handle_error("Failed to receive encrypted message from server");
-    }
+
+    // Buffer to hold the encrypted message
+    unsigned char encrypted_message[1024];
+
+
+    // Buffer to hold the decrypted message
+    unsigned char decrypted_message[1024];
+    size_t decrypted_message_len;
+
+    size_t encrypted_message_len = recv(server_sock, encrypted_message, sizeof(encrypted_message), 0);
 
     // Decrypt the message
-    unsigned char decrypted_message[MAX_MESSAGE_SIZE];  // Adjust the buffer size accordingly
-    size_t decrypted_message_len = decrypt_message(encrypted_message, received_len, shared_secret, shared_secret_len, decrypted_message);
-    if (decrypted_message_len <= 0) {
-        handle_error("Failed to decrypt message");
-    }
-
-    // Null-terminate the decrypted message
-    decrypted_message[decrypted_message_len] = '\0';
+    decrypted_message_len = decrypt_message(encrypted_message, encrypted_message_len, shared_secret, strlen((const char*)shared_secret), decrypted_message);
 
     // Print the decrypted message
-    printf("Received Message: %s\n", decrypted_message);
+    printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
 
     // Clean up
     DH_free(dh);
@@ -740,13 +791,174 @@ int get_executor() {
 
 }
 
+void generateIV(unsigned char* iv, size_t iv_len) {
+
+    if (RAND_bytes(iv, iv_len) != 1) {
+        perror("Failed to generate random IV");
+        exit(EXIT_FAILURE);
+    }
+}
+
+int start_executor(char* arg, struct peer_info *peer) {
+    return 1;
+}
+
+void printEvpKey(EVP_PKEY *key) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        // Error handling
+        return;
+    }
+
+    if (!PEM_write_bio_PUBKEY(bio, key)) {
+        // Error handling
+        BIO_free(bio);
+        return;
+    }
+
+    char *pubKeyStr = NULL;
+    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
+    if (pubKeyLen > 0) {
+        printf("Public Key:\n%s\n", pubKeyStr);
+    }
+
+    BIO_free(bio);
+}
+
+
+int verifySelfSignedCertificate(const char* certFile) {
+    // Load the self-signed certificate from file
+    FILE* fp = fopen(certFile, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "Failed to open certificate file\n");
+        return 0;
+    }
+    X509* cert = PEM_read_X509(fp, NULL, NULL, NULL);
+    fclose(fp);
+
+    if (cert == NULL) {
+        fprintf(stderr, "Failed to read certificate\n");
+        return 0;
+    }
+
+    // Create a certificate store and add the self-signed certificate to it
+    X509_STORE* store = X509_STORE_new();
+    if (store == NULL) {
+        fprintf(stderr, "Failed to create certificate store\n");
+        X509_free(cert);
+        return 0;
+    }
+
+    if (X509_STORE_add_cert(store, cert) != 1) {
+        fprintf(stderr, "Failed to add certificate to store\n");
+        X509_free(cert);
+        X509_STORE_free(store);
+        return 0;
+    }
+
+    // Create a verification context and initialize it with the store, certificate, and no chain
+    X509_STORE_CTX* ctx = X509_STORE_CTX_new();
+    if (ctx == NULL) {
+        fprintf(stderr, "Failed to create verification context\n");
+        X509_free(cert);
+        X509_STORE_free(store);
+        return 0;
+    }
+
+    X509_STORE_CTX_init(ctx, store, cert, NULL);
+
+    // Perform the certificate verification
+    int result = X509_verify_cert(ctx);
+    if (result != 1) {
+        fprintf(stderr, "Certificate verification failed\n");
+    } else {
+        printf("Certificate verification succeeded\n");
+    }
+
+    // Cleanup
+    X509_STORE_CTX_free(ctx);
+    X509_STORE_free(store);
+    X509_free(cert);
+
+    return result;
+}
+
+void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
+
+    char *message = "1:[ PEER CONNESSO CORRETTAMENTE ]";
+    char buffer[BUFFER_SIZE] = {0};
+    int valread;
+    struct sockaddr_in serv_addr;
+
+    /* Allocazione memoria */
+    peer = (struct peer_info *) malloc(sizeof(struct peer_info));
+    register_item = (struct register_info *) malloc(sizeof(struct register_info));
+    peer->register_list = (struct register_info *) malloc(sizeof(struct register_info));
+
+    /* Allocazione memoria per server informazioni */
+    server = (struct server_info *) malloc(sizeof(struct server_info));
+
+    /* Inizializzazione */
+    peer->register_list = NULL;
+    peer->port = 1024;
+
+    // Creazione del socket
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("Errore nella creazione del socket");
+        return;
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
+
+    // Conversione dell'indirizzo IP da stringa a formato binario
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+        perror("Indirizzo non valido / errore di conversione");
+        return;
+    }
+
+    // Connessione al server
+    if (connect(server_sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Connessione fallita");
+        return;
+    }
+
+    server->serv_addr = serv_addr;
+    server->server_sock = server_sock;
+
+    /* Verify the identity of the server */
+    verifySelfSignedCertificate("../server/certificate.pem");
+
+    // Invio del messaggio al server
+    send(server->server_sock, message, strlen(message), 0);
+
+    /* Ricezione della chiave pubblica */
+    // Ricevi i dati della chiave pubblica dal server tramite il socket
+    unsigned char receivedBuffer[BUFFER_SIZE];  // Definisci la dimensione massima del buffer
+    int receivedSize = recv(server->server_sock, receivedBuffer, sizeof(receivedBuffer), 0);
+    //int receivedSize = read(server_sock, receivedBuffer, BUFFER_SIZE);
+    if (receivedSize <= 0) {
+        perror("Failed to receive public key");
+        return;
+    }
+
+    // Converti i dati ricevuti nella chiave pubblica del server
+    EVP_PKEY* serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
+    if (serverPublicKey == NULL) {
+        printf("Failed to convert received data to public key\n");
+        return;
+    }
+
+    printEvpKey(serverPublicKey);
+}
+
 cmd_executor executors[] = {
-    *register_executor,
-    *login_executor,
-    *start_executor,
-    *add_executor,
-    *get_executor,
-    *stop_executor
+        *register_executor,
+        *login_executor,
+        *start_executor,
+        *add_executor,
+        *get_executor,
+        *stop_executor
 };
 
 int process_command(const char* cmd, char* arg, struct peer_info *peer) {
@@ -809,91 +1021,6 @@ int _handle_cmd(struct peer_info *peer) {
     return ris;
 }
 
-void printEvpKey(EVP_PKEY *key) {
-    BIO *bio = BIO_new(BIO_s_mem());
-    if (bio == NULL) {
-        // Error handling
-        return;
-    }
-
-    if (!PEM_write_bio_PUBKEY(bio, key)) {
-        // Error handling
-        BIO_free(bio);
-        return;
-    }
-
-    char *pubKeyStr = NULL;
-    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
-    if (pubKeyLen > 0) {
-        printf("Public Key:\n%s\n", pubKeyStr);
-    }
-
-    BIO_free(bio);
-}
-
-
-void startEngine(struct peer_info *peer, struct register_info *register_item,  struct sockaddr_in serv_addr) {
-
-    char *message = "1:[ PEER CONNESSO CORRETTAMENTE ]";
-    char buffer[BUFFER_SIZE] = {0};
-    int valread;
-
-    /* Allocazione memoria */
-    peer = (struct peer_info *) malloc(sizeof(struct peer_info));
-    register_item = (struct register_info *) malloc(sizeof(struct register_info));
-    peer->register_list = (struct register_info *) malloc(sizeof(struct register_info));
-
-    /* Inizializzazione */
-    peer->register_list = NULL;
-    peer->port = 1024;
-
-    // Creazione del socket
-    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Errore nella creazione del socket");
-        return;
-    }
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
-
-    // Conversione dell'indirizzo IP da stringa a formato binario
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        perror("Indirizzo non valido / errore di conversione");
-        return;
-    }
-
-    // Connessione al server
-    if (connect(server_sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Connessione fallita");
-        return;
-    }
-
-    // Invio del messaggio al server
-    send(server_sock, message, strlen(message), 0);
-
-    // Lettura della risposta dal server
-    // In questo caso riceverò prima la chiave pubblica del server in modo da confrontare il certificato con essa
-    // e verificare l'identità del server
-
-    // Ricevi i dati della chiave pubblica dal server tramite il socket
-    unsigned char receivedBuffer[BUFFER_SIZE];  // Definisci la dimensione massima del buffer
-    int receivedSize = recv(server_sock, receivedBuffer, sizeof(receivedBuffer), 0);
-    //int receivedSize = read(server_sock, receivedBuffer, BUFFER_SIZE);
-    if (receivedSize <= 0) {
-        perror("Failed to receive public key");
-        return;
-    }
-
-    // Converti i dati ricevuti nella chiave pubblica del server
-    EVP_PKEY* serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
-    if (serverPublicKey == NULL) {
-        printf("Failed to convert received data to public key\n");
-        return;
-    }
-
-    printEvpKey(serverPublicKey);
-}
-
 int main() {
 
     struct sockaddr_in serv_addr;
@@ -904,6 +1031,7 @@ int main() {
 
     struct peer_info *peer;
     struct register_info *register_item;
+    struct server_info *server;
 
     /* Buffer di ricezione/appoggio/appoggio */
     char bufferRicezione[MAXLINE],
@@ -913,7 +1041,7 @@ int main() {
     /* Struttura indirizzo server/client */
     struct sockaddr_in my_addr, cl_addr;
 
-    startEngine((struct peer_info *) &peer, (struct register_info *) &register_item, serv_addr);
+    startEngine((struct peer_info *) &peer, (struct register_info *) &register_item, server);
 
     /* Reset dei descrittori */
     FD_ZERO(&master);
