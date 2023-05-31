@@ -15,12 +15,11 @@
 #define PORT	    8080
 #define MAXLINE     1024
 #define MAX_KEY_SIZE 2048
-#define MAX_MESSAGE_SIZE 1460
 #define MAX_CLIENTS 5
 #define BUFFER_SIZE 1024
 #define HMAC_SIZE 32
-#define IV_SIZE 16
 #define NONCE_SIZE 16
+#define TABLE_SIZE 100
 
 #define COMMANDS 5
 #define COMMAND_PREFIX '!'
@@ -63,6 +62,70 @@ int global_peers_number = 0;
 struct peer_list *peer_list = NULL;
 
 int crypted = 0;
+
+typedef struct peerInfo {
+    int port;
+    char dataRemota[1024];
+
+    char nome[1024];
+    char cognome[1024];
+    char username[1024];
+    char password[1024];
+    float balance[1024];
+
+    EVP_PKEY *pubKey;
+} PeerInfo;
+
+typedef struct {
+    int key;
+    PeerInfo* value;
+} Entry;
+
+typedef struct {
+    Entry* entries[TABLE_SIZE];
+} HashTable;
+
+
+HashTable hashTable;
+
+// Funzione di hash semplice
+int hash(int key) {
+    return key % TABLE_SIZE;
+}
+
+// Inizializza la tabella hash
+void initializeHashTable(HashTable* hashTable) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        hashTable->entries[i] = NULL;
+    }
+}
+
+// Inserisci un elemento nella tabella hash
+void insert(HashTable* hashTable, int key, PeerInfo* value) {
+    int index = hash(key);
+
+    // Crea una nuova entry
+    Entry* newEntry = malloc(sizeof(Entry));
+    newEntry->key = key;
+    newEntry->value = value;
+
+    // Inserisci la nuova entry nella posizione corrispondente
+    hashTable->entries[index] = newEntry;
+}
+
+// Recupera un elemento dalla tabella hash
+PeerInfo* get(HashTable* hashTable, int key) {
+    int index = hash(key);
+
+    // Cerca l'elemento nella posizione corrispondente
+    Entry* entry = hashTable->entries[index];
+    if (entry != NULL && entry->key == key) {
+        return entry->value;
+    }
+
+    // Elemento non trovato
+    return NULL;
+}
 
 /* Diffie-Hellman Parameters */
 unsigned char* shared_secret;
@@ -134,6 +197,42 @@ void sendPublicKey(int socket, EVP_PKEY* publicKey) {
     }
 
     free(buffer);
+}
+
+void printEvpKey(EVP_PKEY *key) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        // Error handling
+        return;
+    }
+
+    if (!PEM_write_bio_PUBKEY(bio, key)) {
+        // Error handling
+        BIO_free(bio);
+        return;
+    }
+
+    char *pubKeyStr = NULL;
+    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
+    if (pubKeyLen > 0) {
+        printf("Public Key:\n%s\n", pubKeyStr);
+    }
+
+    BIO_free(bio);
+}
+
+EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
+    // Alloca un puntatore temporaneo per il buffer
+    unsigned char* bufferPtr = buffer;
+
+    // Converte i dati del buffer nella chiave pubblica
+    EVP_PKEY* publicKey = d2i_PUBKEY(NULL, (const unsigned char**)&bufferPtr, bufferSize);
+    if (publicKey == NULL) {
+        perror("Failed to convert data to public key");
+        return NULL;
+    }
+
+    return publicKey;
 }
 
 EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
@@ -358,30 +457,51 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, uns
     return ciphertext_len;
 }
 
-size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, const unsigned char* key, size_t key_len, unsigned char* plaintext) {
-    // Extract the IV from the ciphertext
-    unsigned char iv[AES_BLOCK_SIZE];
-    memcpy(iv, ciphertext + ciphertext_len - AES_BLOCK_SIZE - NONCE_SIZE - HMAC_SIZE, AES_BLOCK_SIZE);
-    //print_hex(iv, strlen(iv), "IV");
+int extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsigned char* iv, unsigned char* nonce, unsigned char* hmac, const unsigned char* key, size_t key_len) {
+    size_t iv_offset = ciphertext_len - 16 - NONCE_SIZE - HMAC_SIZE;
+    size_t nonce_offset = ciphertext_len - NONCE_SIZE - HMAC_SIZE;
+    size_t hmac_offset = ciphertext_len - HMAC_SIZE;
 
-    // Extract the nonce from the ciphertext
-    unsigned char nonce[NONCE_SIZE];
-    memcpy(nonce, ciphertext + ciphertext_len - NONCE_SIZE - HMAC_SIZE, NONCE_SIZE);
-    //print_hex(nonce, strlen(nonce), "Nonce");
+    memcpy(iv, ciphertext + iv_offset, 16);
+    //print_hex(iv, 16, "IV Val");
+    memcpy(nonce, ciphertext + nonce_offset, NONCE_SIZE);
+    //print_hex(nonce, NONCE_SIZE, "NONCE Val");
+    memcpy(hmac, ciphertext + hmac_offset, HMAC_SIZE);
 
-    // Extract the HMAC from the ciphertext
-    unsigned char hmac[HMAC_SIZE];
-    memcpy(hmac, ciphertext + ciphertext_len - HMAC_SIZE, HMAC_SIZE);
-
-    //print_hex(hmac, HMAC_SIZE, "HMAC");
+    unsigned char* ciphertext_only = (unsigned char*)malloc(ciphertext_len - 64);
+    memcpy(ciphertext_only, ciphertext, ciphertext_len - 64);
+    //print_hex(ciphertext_only, strlen(ciphertext_only), "CIPHERTEXT_ONLY");
 
     // Calculate the expected HMAC of the ciphertext
-    unsigned char expected_hmac[HMAC_SIZE];
-    calculate_hmac(ciphertext, ciphertext_len - AES_BLOCK_SIZE - NONCE_SIZE - HMAC_SIZE, key, key_len, expected_hmac);
+    unsigned char expected_hmac[32];
+    calculate_hmac(ciphertext_only, ciphertext_len - 64, key, key_len, expected_hmac);
 
-    // Verify the HMAC
-    if (memcmp(hmac, expected_hmac, HMAC_SIZE) != 0) {
-        handle_error("HMAC verification failed");
+    //print_hex(hmac, 32, "HMAC");
+    //print_hex(expected_hmac, 32, "EXPECTED HMAC");
+
+    // Confronto tra l'HMAC ricevuto e l'HMAC calcolato
+    int result = 0;
+    if (strlen(hmac) == strlen(expected_hmac)) {
+        result = CRYPTO_memcmp(hmac, expected_hmac, strlen(hmac));
+    }
+
+    return result;
+}
+
+size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, unsigned char* plaintext) {
+
+    //print_hex(ciphertext, ciphertext_len, "ENCRYPTED_TEXT");
+
+    // Extract the IV from the ciphertext
+    unsigned char iv[16];
+    // Extract the nonce from the ciphertext
+    unsigned char nonce[16];
+    // Extract the HMAC from the ciphertext
+    unsigned char hmac[32];
+
+    int res = extract_values(ciphertext, ciphertext_len, iv, nonce, hmac, shared_secret, strlen(shared_secret));
+    if (res != 0) {
+        handle_error("HMAC NON VALIDO");
     }
 
     // Create a decryption context
@@ -391,13 +511,13 @@ size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, c
     }
 
     // Initialize the decryption operation with the IV
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, shared_secret, iv) != 1) {
         handle_error("Failed to initialize decryption operation");
     }
 
     // Provide the ciphertext to be decrypted
     int plaintext_len;
-    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - AES_BLOCK_SIZE - NONCE_SIZE - HMAC_SIZE) != 1) {
+    if (EVP_DecryptUpdate(ctx, plaintext, &plaintext_len, ciphertext, ciphertext_len - 16 - 16 - 32) != 1) {
         handle_error("Failed to decrypt ciphertext");
     }
 
@@ -421,13 +541,6 @@ void sendMessage(int socket, unsigned char *buffer, int buffer_len)
     {
         perror("Error sending message");
         exit(1);
-    }
-}
-
-void generateIV(unsigned char* iv, size_t iv_len) {
-    if (RAND_bytes(iv, iv_len) != 1) {
-        perror("Failed to generate random IV");
-        exit(EXIT_FAILURE);
     }
 }
 
@@ -705,6 +818,7 @@ int main() {
     int addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
     char *response;
+    int numBytesRead;
 
     /* Buffer di ricezione/appoggio/appoggio */
     char bufferRicezione[MAXLINE],
@@ -752,6 +866,8 @@ int main() {
     for (int i = 0; i < max_clients; i++) {
         client_sockets[i] = 0;
     }
+
+    initializeHashTable(&hashTable);
 
     // Accettazione di connessioni in entrata e gestione delle richieste
     // SERVER IN ASCOLTO SULLA PORTA 8080
@@ -810,20 +926,45 @@ int main() {
 
             if (FD_ISSET(sd, &readfds)) {
                 // Controllo se è una chiusura del socket
-                if ((read(sd, buffer, BUFFER_SIZE)) == 0) {
+                if ((numBytesRead = recv(sd, buffer, BUFFER_SIZE, 0)) == 0) {
                     // Il client ha chiuso la connessione
                     close(sd);
                     client_sockets[i] = 0;
                 } else {
                     // Lettura dei dati inviati dal client
                     printf("\n\n\n\n\t\t\t\t   [  MESSAGGIO DAL CLIENT (%d)  ]\n\n", sd);
-                    /* Verifico che sia un segnale da parte del server DS */
 
-                    strtok(buffer, ":");
-                    //printf("\nBuffer: %s", buffer);
+                    if (crypted) {
+                        printf("Crypted\n");
+
+                        // Buffer to hold the decrypted message
+                        unsigned char decrypted_message[1024];
+                        size_t decrypted_message_len;
+
+                        // Decrypt the message
+                        decrypted_message_len = decrypt_message(buffer, numBytesRead, decrypted_message);
+
+                        // Print the decrypted message
+                        printf("Decrypted Message: %s\n", decrypted_message);
+
+                        /* Verifico che sia un segnale da parte del server DS */
+                        memcpy(buffer, decrypted_message, decrypted_message_len);
+                    }
+
+                    char destination;  // Variabile di destinazione per il primo byte
+
+                    // Copia il primo byte dalla stringa di origine alla variabile di destinazione
+                    memcpy(&destination, buffer, 1);
+
+                    // Stampa il primo byte
+                    printf("Primo byte: %c\n", destination);
+
+                    /* Verifico che sia un segnale da parte del server DS */
+                    //memcpy(bufferCopy, buffer, numBytesRead);
+                    //strtok(buffer, ":");
 
                     /* SIGNAL 1: Il server comunica che questo è il primo peer del network */
-                    if (atoi(buffer) == 1) {
+                    if (atoi(&destination) == 1) {
 
                         printf("\n\n\t\t\t\t    [ NUOVO PEER NELLA RETE ]\n\n");
                         response = "\n\n\t\t\t\t    [ CONNECTED SUCCESSFULLY ]\n\n";
@@ -847,25 +988,68 @@ int main() {
                         sendPublicKey(sd, server_pubkey);
                         printf("Public key sent!\n %s", pubkey_data);
 
+                        printf("Aggiungo un nuovo utente");
+                        // Creazione e inizializzazione di una struttura PeerInfo
+                        PeerInfo* peer = malloc(sizeof(PeerInfo));
+                        peer->port = 8080;
+
+                        strcpy(peer->dataRemota, "Dati remoti");
+
+                        // Inserisci l'elemento nella tabella hash
+                        insert(&hashTable, sd, peer);
+
                         // Invio della risposta al client
                         //send(sd, response, strlen(response), 0);
                         break;
-                    }
-
-
-                    /* SIGNAL 2: Il server comunica che questo è il primo peer del network */
-                    if (atoi(buffer) == 2) {
-
+                    } else if (atoi(&destination) == 2) {
+                        /* SIGNAL 2: Il server comunica che questo è il primo peer del network */
                         printf("\n\n\t\t\t\t    [ DIFFIE-HELLMAN EXCHANGE ]\n\n");
                         diffieHellman(sd);
                         crypted = 1;
                         break;
-                    }
+                    } else if (atoi(&destination) == 3) {
 
-                    if (atoi(buffer) == 3) {
+
+
+                        // Recupera l'elemento dalla tabella hash
+                        PeerInfo* retrievedPeer = get(&hashTable, sd);
+                        if (retrievedPeer != NULL) {
+                            printf("Elemento trovato:\n");
+                            printf("Porta: %d\n", retrievedPeer->port);
+                            printf("Dati remoti: %s\n", retrievedPeer->dataRemota);
+                        } else {
+                            printf("Elemento non trovato\n");
+                        }
+                        break;
+                    } else if (atoi(&destination) == 9) {
+
+                        printf("CIAO ADELMO :)");
+
+
+                    }else {
+                        printf("Public Key!\n");
+
+                        // Converti i dati ricevuti nella chiave pubblica del server
+                        EVP_PKEY *serverPublicKey = convertToPublicKey(buffer, sizeof(buffer));
+                        if (serverPublicKey == NULL) {
+                            printf("Failed to convert received data to public key\n");
+                        }
+
+                        printEvpKey(serverPublicKey);
+
+                        // Recupera l'elemento dalla tabella hash
+                        PeerInfo* retrievedPeer = get(&hashTable, sd);
+                        if (retrievedPeer != NULL) {
+                            printf("Elemento trovato:\n");
+                            printf("Porta: %d\n", retrievedPeer->port);
+                            printf("Dati remoti: %s\n", retrievedPeer->dataRemota);
+                            retrievedPeer->pubKey = serverPublicKey;
+                            printEvpKey(retrievedPeer->pubKey);
+                        } else {
+                            printf("Elemento non trovato\n");
+                        }
                         break;
                     }
-
                 }
             }
         }

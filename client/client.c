@@ -81,6 +81,19 @@ struct map {
     int received;
 };
 
+typedef struct peerInfo {
+    int port;
+    char dataRemota[1024];
+
+    char nome[1024];
+    char cognome[1024];
+    char username[1024];
+    char password[1024];
+    float balance[1024];
+
+    EVP_PKEY *pubKey;
+} PeerInfo;
+
 typedef int (*cmd_executor)(char* arg, struct peer_info *peer);
 
 
@@ -113,6 +126,11 @@ int registered;
 int periodoAnalisi;
 
 EVP_PKEY* serverPublicKey;
+
+const unsigned char pathPrivK[1024];
+const unsigned char pathPubK[1024];
+
+PeerInfo *mySelf;
 
 /* Conta il numero di register creati */
 int numRegister;
@@ -305,33 +323,200 @@ int add_executor(char* arg, struct peer_info *peer) {
 int stop_executor(char* arg, struct peer_info *peer) {
 }
 
+void sendPublicKey(int socket, EVP_PKEY* publicKey) {
+    // Ottieni la dimensione del buffer necessario per la serializzazione
+    int bufferSize = i2d_PUBKEY(publicKey, NULL);
+    if (bufferSize < 0) {
+        perror("Failed to get buffer size for public key");
+        return;
+    }
 
-void generate_key_pair(const unsigned char *pathPrivK, const unsigned char *pathPubK) {
-    RSA* rsa = RSA_new();
-    BIGNUM* e = BN_new();
+    // Alloca il buffer per la serializzazione
+    unsigned char* buffer = (unsigned char*)malloc(bufferSize);
+    if (buffer == NULL) {
+        perror("Failed to allocate memory for public key serialization");
+        return;
+    }
 
-    // Imposta il valore di e (public exponent) a 65537
-    BN_set_word(e, RSA_F4);
+    // Serializza la chiave pubblica nel buffer
+    unsigned char* bufferPtr = buffer;
+    int result = i2d_PUBKEY(publicKey, &bufferPtr);
+    if (result < 0) {
+        perror("Failed to serialize public key");
+        free(buffer);
+        return;
+    }
 
-    // Genera la coppia di chiavi crittografiche RSA
-    RSA_generate_key_ex(rsa, 2048, e, NULL);
+    // Invia i dati della chiave pubblica sul socket
+    result = send(socket, buffer, bufferSize, 0);
+    if (result < 0) {
+        perror("Failed to send public key");
+        free(buffer);
+        return;
+    }
 
-    // Salva la chiave privata su file in formato PEM
-    FILE* private_key_file = fopen(pathPrivK, "wb");
-    PEM_write_RSAPrivateKey(private_key_file, rsa, NULL, NULL, 0, NULL, NULL);
-    fclose(private_key_file);
-
-    // Salva la chiave pubblica su file in formato PEM
-    FILE* public_key_file = fopen(pathPubK, "wb");
-    PEM_write_RSAPublicKey(public_key_file, rsa);
-    fclose(public_key_file);
-
-    // Dealloca le strutture dati
-    RSA_free(rsa);
-    BN_free(e);
+    free(buffer);
 }
 
+void sendPublicKeyWith4(int socket, EVP_PKEY* publicKey) {
+    // Ottieni la dimensione del buffer necessario per la serializzazione
+    int bufferSize = i2d_PUBKEY(publicKey, NULL);
+    if (bufferSize < 0) {
+        perror("Failed to get buffer size for public key");
+        return;
+    }
+
+    // Alloca il buffer per la serializzazione
+    unsigned char* buffer = (unsigned char*)malloc(bufferSize + 1);
+    if (buffer == NULL) {
+        perror("Failed to allocate memory for public key serialization");
+        return;
+    }
+
+    // Serializza la chiave pubblica nel buffer
+    unsigned char* bufferPtr = buffer + 1;  // Sposta il puntatore in avanti di un byte
+    int result = i2d_PUBKEY(publicKey, &bufferPtr);
+    if (result < 0) {
+        perror("Failed to serialize public key");
+        free(buffer);
+        return;
+    }
+
+    // Assegna il valore 4 al primo byte del buffer
+    buffer[0] = '4';
+
+    // Invia i dati della chiave pubblica sul socket
+    result = send(socket, buffer, bufferSize + 1, 0);
+    if (result < 0) {
+        perror("Failed to send public key");
+        free(buffer);
+        return;
+    }
+
+    free(buffer);
+}
+
+
+void printEvpKey(EVP_PKEY *key) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        // Error handling
+        return;
+    }
+
+    if (!PEM_write_bio_PUBKEY(bio, key)) {
+        // Error handling
+        BIO_free(bio);
+        return;
+    }
+
+    char *pubKeyStr = NULL;
+    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
+    if (pubKeyLen > 0) {
+        printf("Public Key:\n%s\n", pubKeyStr);
+    }
+
+    BIO_free(bio);
+}
+
+EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
+    EVP_PKEY* publicKey = NULL;
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    PEM_read_PUBKEY(file, &publicKey, NULL, NULL);
+
+    fclose(file);
+    return publicKey;
+}
+
+
+
+EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_file) {
+    EVP_PKEY* keypair = NULL;
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+    FILE* private_key_fp = NULL;
+    FILE* public_key_fp = NULL;
+
+    if (ctx == NULL) {
+        fprintf(stderr, "Failed to create EVP_PKEY_CTX\n");
+        return NULL;
+    }
+
+    // Initialize the key generation context
+    if (EVP_PKEY_keygen_init(ctx) <= 0) {
+        fprintf(stderr, "Failed to initialize EVP_PKEY_CTX\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    // Set the RSA key size
+    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0) {
+        fprintf(stderr, "Failed to set RSA key size\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    // Generate the key pair
+    if (EVP_PKEY_keygen(ctx, &keypair) <= 0) {
+        fprintf(stderr, "Failed to generate key pair\n");
+        EVP_PKEY_CTX_free(ctx);
+        return NULL;
+    }
+
+    EVP_PKEY_CTX_free(ctx);
+
+    // Save the private key to file
+    private_key_fp = fopen(private_key_file, "wb");
+    if (private_key_fp == NULL) {
+        fprintf(stderr, "Failed to open private key file\n");
+        EVP_PKEY_free(keypair);
+        return NULL;
+    }
+    if (PEM_write_PrivateKey(private_key_fp, keypair, NULL, NULL, 0, NULL, NULL) != 1) {
+        fprintf(stderr, "Failed to write private key\n");
+        EVP_PKEY_free(keypair);
+        fclose(private_key_fp);
+        return NULL;
+    }
+    fclose(private_key_fp);
+
+    // Save the public key to file
+    public_key_fp = fopen(public_key_file, "wb");
+    if (public_key_fp == NULL) {
+        fprintf(stderr, "Failed to open public key file\n");
+        EVP_PKEY_free(keypair);
+        return NULL;
+    }
+    if (PEM_write_PUBKEY(public_key_fp, keypair) != 1) {
+        fprintf(stderr, "Failed to write public key\n");
+        EVP_PKEY_free(keypair);
+        fclose(public_key_fp);
+        return NULL;
+    }
+    fclose(public_key_fp);
+
+    EVP_PKEY* server_pubkey = readPublicKeyFromPEM(public_key_file);
+    if (server_pubkey == NULL) {
+        printf("Failed to read public key from file\n");
+        return NULL;
+    }
+
+    return keypair;
+}
+
+
 int register_executor() {
+
+    // Allocazione della variabile PeerInfo
+    mySelf= malloc(sizeof(PeerInfo));
+    if (mySelf == NULL) {
+        perror("Errore nell'allocazione di PeerInfo");
+        return 1;
+    }
 
     char *nome,
             *cognome,
@@ -339,7 +524,6 @@ int register_executor() {
             *password;
 
     int balance = 0;
-
     char answer;
 
     nome = malloc(sizeof(char) * 20);
@@ -366,6 +550,11 @@ int register_executor() {
     char folderpath[256];
 
     if (strcmp("Y", &answer) == 0 || strcmp("y", &answer) == 0) {
+
+        memcpy(mySelf->nome, nome, strlen(nome) + 1);
+        memcpy(mySelf->cognome, cognome, strlen(cognome) + 1);
+        memcpy(mySelf->username, username, strlen(username) + 1);
+        memcpy(mySelf->password, password, strlen(password) + 1);
 
         /* Scrivere il testo cifrato su file */
         /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
@@ -451,13 +640,11 @@ int register_executor() {
     }
 
     // Genero la mia coppia di chiavi private e pubbliche
-    const unsigned char pathPrivK[1024];
-    const unsigned char pathPubK[1024];
 
     snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
-    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "publick_key");
+    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
 
-    generate_key_pair(pathPrivK, pathPubK);
+    generate_keypair(pathPrivK, pathPubK);
 }
 
 struct user* readInformationsUser(const char* filename) {
@@ -629,19 +816,19 @@ void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned c
     HMAC_CTX_free(ctx);
 }
 
-size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, const unsigned char* key, size_t key_len, unsigned char* ciphertext) {
+size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, unsigned char* ciphertext) {
     // Generate a random IV
-    unsigned char iv[AES_BLOCK_SIZE];
-    if (RAND_bytes(iv, AES_BLOCK_SIZE) != 1) {
+    unsigned char iv[16];
+    if (RAND_bytes(iv, 16) != 1) {
         handle_error("Failed to generate IV");
     }
-
+    //print_hex(iv, 16, "IV");
     // Generate a random nonce
-    unsigned char nonce[NONCE_SIZE];
-    if (RAND_bytes(nonce, NONCE_SIZE) != 1) {
+    unsigned char nonce[16];
+    if (RAND_bytes(nonce, 16) != 1) {
         handle_error("Failed to generate nonce");
     }
-
+    //print_hex(nonce, 16, "NONCE");
     // Create an encryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
@@ -649,7 +836,7 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, con
     }
 
     // Initialize the encryption operation with the IV
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv) != 1) {
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, shared_secret, iv) != 1) {
         handle_error("Failed to initialize encryption operation");
     }
 
@@ -667,16 +854,18 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, con
     ciphertext_len += final_len;
 
     // Calculate HMAC for the ciphertext
-    unsigned char hmac[HMAC_SIZE];
-    calculate_hmac(ciphertext, ciphertext_len, key, key_len, hmac);
+    unsigned char hmac[32];
+    //print_hex(ciphertext, ciphertext_len, "CIPHERTEXT");
+    calculate_hmac(ciphertext, ciphertext_len, shared_secret, strlen(shared_secret), hmac);
+    //print_hex(hmac, 32, "HMAC");
 
     // Prepare the final message by concatenating IV, nonce, ciphertext, and HMAC
     memcpy(ciphertext + ciphertext_len, iv, AES_BLOCK_SIZE);
-    ciphertext_len += AES_BLOCK_SIZE;
+    ciphertext_len += 16;
     memcpy(ciphertext + ciphertext_len, nonce, NONCE_SIZE);
-    ciphertext_len += NONCE_SIZE;
+    ciphertext_len += 16;
     memcpy(ciphertext + ciphertext_len, hmac, HMAC_SIZE);
-    ciphertext_len += HMAC_SIZE;
+    ciphertext_len += 32;
 
     // Clean up the encryption context
     EVP_CIPHER_CTX_free(ctx);
@@ -790,9 +979,26 @@ DH* create_dh_params()
     return dh;
 }
 
+int _executor(char* message, struct peer_info *peer) {
+
+    // Message to be sent
+    size_t message_len = strlen(message);
+
+    // Buffer to hold the encrypted message
+    unsigned char encrypted_message[1024];
+    size_t encrypted_message_len;
+
+    // Encrypt the message
+    encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
+
+    //print_hex(encrypted_message, encrypted_message_len, "Encrypted Text");
+
+    sendMessage(server_sock, encrypted_message, encrypted_message_len);
+}
+
 int get_executor() {
 
-    unsigned char* diffieMessage = "2:Diffie";
+    unsigned char* diffieMessage = "2Diffie";
     sendMessage(server_sock, diffieMessage, strlen(diffieMessage));
 
     // Start diffie hellman exchange
@@ -882,44 +1088,6 @@ void generateIV(unsigned char* iv, size_t iv_len) {
     }
 }
 
-int start_executor(char* arg, struct peer_info *peer) {
-
-    /*HMAC:  D0ED7223B63AD467C4D10C81337F6972CD87A477A1578CCA2AF173E65B2E2A5F */
-    const unsigned char *ciphertext = "09752FEECDC5774C247B317971507AB9";
-    unsigned char exp_hmac[32];
-
-    for (int i=0; i < 10; i++) {
-        calculate_hmac(ciphertext, strlen(ciphertext), shared_secret, strlen(shared_secret), exp_hmac);
-        printf("%d: ", i);
-        print_hex(exp_hmac, strlen(exp_hmac), "HMAC");
-        printf("\n");
-    }
-    return 1;
-}
-
-void printEvpKey(EVP_PKEY *key) {
-    BIO *bio = BIO_new(BIO_s_mem());
-    if (bio == NULL) {
-        // Error handling
-        return;
-    }
-
-    if (!PEM_write_bio_PUBKEY(bio, key)) {
-        // Error handling
-        BIO_free(bio);
-        return;
-    }
-
-    char *pubKeyStr = NULL;
-    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
-    if (pubKeyLen > 0) {
-        printf("Public Key:\n%s\n", pubKeyStr);
-    }
-
-    BIO_free(bio);
-}
-
-
 int verifySelfSignedCertificate(const char* certFile) {
     // Load the self-signed certificate from file
     FILE* fp = fopen(certFile, "r");
@@ -993,47 +1161,52 @@ void showInput() {
     tcsetattr(fileno(stdin), TCSANOW, &term);
 }
 
+void sendEncryptedPublicKey(int socket, EVP_PKEY* publicKey) {
+    // Get the public key size
+    int publicKeySize = i2d_PUBKEY(publicKey, NULL);
+    if (publicKeySize < 0) {
+        perror("Failed to get public key size");
+        return;
+    }
+
+    // Allocate memory for the public key buffer
+    unsigned char* publicKeyBuffer = (unsigned char*)malloc(publicKeySize);
+    if (publicKeyBuffer == NULL) {
+        perror("Failed to allocate memory for public key");
+        return;
+    }
+
+    // Serialize the public key into the buffer
+    unsigned char* publicKeyPtr = publicKeyBuffer;
+    int result = i2d_PUBKEY(publicKey, &publicKeyPtr);
+    if (result < 0) {
+        perror("Failed to serialize public key");
+        free(publicKeyBuffer);
+        return;
+    }
+
+    // Encrypt the public key
+    unsigned char encryptedPublicKey[1024];  // Adjust the buffer size as needed
+    size_t encryptedSize = encrypt_message(publicKeyBuffer, publicKeySize, encryptedPublicKey);
+
+    // Send the encrypted public key over the socket
+    result = send(socket, encryptedPublicKey, encryptedSize, 0);
+    if (result < 0) {
+        perror("Failed to send encrypted public key");
+        free(publicKeyBuffer);
+        return;
+    }
+
+    printf("Bytes sent: %d", result);
+
+    free(publicKeyBuffer);
+}
+
+
 
 void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
 
-    // Verifico che il peer sia registrato
-    char answer;
-    printf("Sei registrato correttamente? [Y/n] ");
-    scanf(" %c", &answer);
-
-    if (answer == 'Y' || answer == 'y') {
-        printf("Prego loggarsi correttamente\n");
-
-        char username[50];
-        char password[50];
-
-        printf("Inserisci il nome utente: ");
-        scanf("%s", username);
-
-        printf("Inserisci la password: ");
-        hideInput(); // Nascondi l'input dell'utente
-        scanf("%s", password);
-        showInput(); // Mostra di nuovo l'input dell'utente
-
-        printf("\nNome utente: %s\n", username);
-        printf("Password: %s\n", password);
-
-        // Concatenazione di username e password con uno spazio
-        char credentials[100];
-        strcpy(credentials, username);
-        strcat(credentials, " ");
-        strcat(credentials, password);
-
-        login_executor(credentials, peer);
-
-    } else if (answer == 'N' || answer == 'n') {
-        printf("Per favore registrati.\n");
-        register_executor();
-    } else {
-        printf("Risposta non valida.\n");
-    }
-
-    char *message = "1:[ PEER CONNESSO CORRETTAMENTE ]";
+    char *message = "1[ PEER CONNESSO CORRETTAMENTE ]";
     char buffer[BUFFER_SIZE] = {0};
     int valread;
     struct sockaddr_in serv_addr;
@@ -1098,6 +1271,61 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     }
 
     printEvpKey(serverPublicKey);
+
+    // Verifico che il peer sia registrato
+    char answer;
+    printf("Sei registrato correttamente? [Y/n] ");
+    scanf(" %c", &answer);
+
+    if (answer == 'Y' || answer == 'y') {
+        printf("Prego loggarsi correttamente\n");
+
+        char username[50];
+        char password[50];
+
+        printf("Inserisci il nome utente: ");
+        scanf("%s", username);
+
+        printf("Inserisci la password: ");
+        hideInput(); // Nascondi l'input dell'utente
+        scanf("%s", password);
+        showInput(); // Mostra di nuovo l'input dell'utente
+
+        printf("\nNome utente: %s\n", username);
+        printf("Password: %s\n", password);
+
+        // Concatenazione di username e password con uno spazio
+        char credentials[100];
+        strcpy(credentials, username);
+        strcat(credentials, " ");
+        strcat(credentials, password);
+
+        login_executor(credentials, peer);
+
+    } else if (answer == 'N' || answer == 'n') {
+        printf("Per favore registrati.\n");
+        register_executor();
+    } else {
+        printf("Risposta non valida.\n");
+    }
+
+    get_executor();
+
+    // Invio la mia public key al server cifrata
+
+    EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
+
+    // Converti la chiave pubblica del server in formato PEM
+    BIO* bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PUBKEY(bio, pubKey);
+
+    // Ottieni i dati dalla memoria BIO
+    char* pubkey_data;
+    size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
+
+    sendEncryptedPublicKey(server_sock, pubKey);
+    printf("Public key sent!\n %s", pubkey_data);
+
 }
 
 cmd_executor executors[] = {
