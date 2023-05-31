@@ -24,6 +24,7 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/rand.h>
 #include <openssl/hmac.h>
+#include <termios.h>
 
 #define BUFFER_SIZE 1024
 #define KEY_LENGTH 16
@@ -107,8 +108,11 @@ int listener;
 int newfd;
 
 int crypted = 0;
+int registered;
 
 int periodoAnalisi;
+
+EVP_PKEY* serverPublicKey;
 
 /* Conta il numero di register creati */
 int numRegister;
@@ -301,6 +305,32 @@ int add_executor(char* arg, struct peer_info *peer) {
 int stop_executor(char* arg, struct peer_info *peer) {
 }
 
+
+void generate_key_pair(const unsigned char *pathPrivK, const unsigned char *pathPubK) {
+    RSA* rsa = RSA_new();
+    BIGNUM* e = BN_new();
+
+    // Imposta il valore di e (public exponent) a 65537
+    BN_set_word(e, RSA_F4);
+
+    // Genera la coppia di chiavi crittografiche RSA
+    RSA_generate_key_ex(rsa, 2048, e, NULL);
+
+    // Salva la chiave privata su file in formato PEM
+    FILE* private_key_file = fopen(pathPrivK, "wb");
+    PEM_write_RSAPrivateKey(private_key_file, rsa, NULL, NULL, 0, NULL, NULL);
+    fclose(private_key_file);
+
+    // Salva la chiave pubblica su file in formato PEM
+    FILE* public_key_file = fopen(pathPubK, "wb");
+    PEM_write_RSAPublicKey(public_key_file, rsa);
+    fclose(public_key_file);
+
+    // Dealloca le strutture dati
+    RSA_free(rsa);
+    BN_free(e);
+}
+
 int register_executor() {
 
     char *nome,
@@ -333,19 +363,20 @@ int register_executor() {
     printf("Are the information correct? (Y/n) ");
     scanf("%s", &answer);
 
+    char folderpath[256];
+
     if (strcmp("Y", &answer) == 0 || strcmp("y", &answer) == 0) {
 
         /* Scrivere il testo cifrato su file */
         /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
-
-        const char *directory = "./registered";
+        const char *directory = "../client/registered/";
         const char *filename = username;
 
         // Concatenate the directory and filename to form the full file path
-        char folderpath[256];
+
         snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
 
-        printf("FOLDERPATH: %s", folderpath);
+        printf("FOLDERPATH: %s\n", folderpath);
 
         int result = mkdir(folderpath, 0777);
 
@@ -418,6 +449,15 @@ int register_executor() {
 
         printf("Il testo è stato scritto su file con successo.\n");
     }
+
+    // Genero la mia coppia di chiavi private e pubbliche
+    const unsigned char pathPrivK[1024];
+    const unsigned char pathPubK[1024];
+
+    snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
+    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "publick_key");
+
+    generate_key_pair(pathPrivK, pathPubK);
 }
 
 struct user* readInformationsUser(const char* filename) {
@@ -937,7 +977,61 @@ int verifySelfSignedCertificate(const char* certFile) {
     return result;
 }
 
+// Funzione per nascondere l'input dell'utente
+void hideInput() {
+    struct termios term;
+    tcgetattr(fileno(stdin), &term);
+    term.c_lflag &= ~ECHO;
+    tcsetattr(fileno(stdin), TCSANOW, &term);
+}
+
+// Funzione per mostrare l'input dell'utente
+void showInput() {
+    struct termios term;
+    tcgetattr(fileno(stdin), &term);
+    term.c_lflag |= ECHO;
+    tcsetattr(fileno(stdin), TCSANOW, &term);
+}
+
+
 void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
+
+    // Verifico che il peer sia registrato
+    char answer;
+    printf("Sei registrato correttamente? [Y/n] ");
+    scanf(" %c", &answer);
+
+    if (answer == 'Y' || answer == 'y') {
+        printf("Prego loggarsi correttamente\n");
+
+        char username[50];
+        char password[50];
+
+        printf("Inserisci il nome utente: ");
+        scanf("%s", username);
+
+        printf("Inserisci la password: ");
+        hideInput(); // Nascondi l'input dell'utente
+        scanf("%s", password);
+        showInput(); // Mostra di nuovo l'input dell'utente
+
+        printf("\nNome utente: %s\n", username);
+        printf("Password: %s\n", password);
+
+        // Concatenazione di username e password con uno spazio
+        char credentials[100];
+        strcpy(credentials, username);
+        strcat(credentials, " ");
+        strcat(credentials, password);
+
+        login_executor(credentials, peer);
+
+    } else if (answer == 'N' || answer == 'n') {
+        printf("Per favore registrati.\n");
+        register_executor();
+    } else {
+        printf("Risposta non valida.\n");
+    }
 
     char *message = "1:[ PEER CONNESSO CORRETTAMENTE ]";
     char buffer[BUFFER_SIZE] = {0};
@@ -997,7 +1091,7 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     }
 
     // Converti i dati ricevuti nella chiave pubblica del server
-    EVP_PKEY* serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
+    serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
     if (serverPublicKey == NULL) {
         printf("Failed to convert received data to public key\n");
         return;
