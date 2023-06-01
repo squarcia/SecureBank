@@ -705,7 +705,7 @@ void initializePaths() {
 
     EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
 
-    printEvpKey(privKey);
+    printPrivateKey(privKey);
 
     printf("INITIALISE PATHS: %s", pathPrivK);
 }
