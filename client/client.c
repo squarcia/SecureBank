@@ -91,13 +91,14 @@ typedef struct peerInfo {
     char password[1024];
     float balance[1024];
 
-    EVP_PKEY *pubKey;
+    EVP_PKEY **pubKey;
 } PeerInfo;
 
 typedef int (*cmd_executor)(char* arg, struct peer_info *peer);
 
 
 int numRegister = 0;
+int registered = 0;
 
 
 /* Verifica di connessione al server */
@@ -398,6 +399,7 @@ void sendPublicKeyWith4(int socket, EVP_PKEY* publicKey) {
 
 
 void printEvpKey(EVP_PKEY *key) {
+    printf("CISONO\n");
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL) {
         // Error handling
@@ -410,14 +412,42 @@ void printEvpKey(EVP_PKEY *key) {
         return;
     }
 
-    char *pubKeyStr = NULL;
-    long pubKeyLen = BIO_get_mem_data(bio, &pubKeyStr);
-    if (pubKeyLen > 0) {
-        printf("Public Key:\n%s\n", pubKeyStr);
+    char *KeyStr = NULL;
+    long KeyLen = BIO_get_mem_data(bio, &KeyStr);
+    if (KeyLen > 0) {
+        printf("Public Key:\n%s\n", KeyStr);
     }
 
     BIO_free(bio);
 }
+
+void printPrivateKey(const EVP_PKEY* privateKey) {
+    if (privateKey == NULL) {
+        printf("Invalid private key\n");
+        return;
+    }
+
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        printf("Error creating BIO\n");
+        return;
+    }
+
+    if (!PEM_write_bio_PrivateKey(bio, privateKey, NULL, NULL, 0, NULL, NULL)) {
+        printf("Error writing private key\n");
+        BIO_free(bio);
+        return;
+    }
+
+    char buffer[1024];
+    int bytesRead;
+    while ((bytesRead = BIO_gets(bio, buffer, sizeof(buffer))) > 0) {
+        printf("%s", buffer);
+    }
+
+    BIO_free(bio);
+}
+
 
 EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
     EVP_PKEY* publicKey = NULL;
@@ -433,6 +463,19 @@ EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
     return publicKey;
 }
 
+EVP_PKEY* readPrivateKeyFromPEM(const char* filename) {
+    EVP_PKEY* privateKey = NULL;
+    FILE* file = fopen(filename, "r");
+    if (file == NULL) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    privateKey = PEM_read_PrivateKey(file, NULL, NULL, NULL);
+
+    fclose(file);
+    return privateKey;
+}
 
 
 EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_file) {
@@ -505,18 +548,19 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
         return NULL;
     }
 
+    EVP_PKEY* server_privkey = readPrivateKeyFromPEM(private_key_file);
+    if (server_privkey == NULL) {
+        printf("Failed to read private key from file\n");
+        return NULL;
+    }
+
+   // printPrivateKey(server_privkey);
+
     return keypair;
 }
 
 
 int register_executor() {
-
-    // Allocazione della variabile PeerInfo
-    mySelf= malloc(sizeof(PeerInfo));
-    if (mySelf == NULL) {
-        perror("Errore nell'allocazione di PeerInfo");
-        return 1;
-    }
 
     char *nome,
             *cognome,
@@ -558,7 +602,7 @@ int register_executor() {
 
         /* Scrivere il testo cifrato su file */
         /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
-        const char *directory = "../client/registered/";
+        const char *directory = "../client/registered";
         const char *filename = username;
 
         // Concatenate the directory and filename to form the full file path
@@ -647,6 +691,25 @@ int register_executor() {
     generate_keypair(pathPrivK, pathPubK);
 }
 
+void initializePaths() {
+
+    char folderpath[256];
+
+    const char *directory = "../client/registered";
+    const char *filename = mySelf->username;
+
+    snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
+
+    snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
+    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
+
+    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+
+    printEvpKey(privKey);
+
+    printf("INITIALISE PATHS: %s", pathPrivK);
+}
+
 struct user* readInformationsUser(const char* filename) {
 
     // Apri il file in modalità lettura
@@ -673,7 +736,12 @@ struct user* readInformationsUser(const char* filename) {
     usr->username = strtok(NULL, delimiter);
     usr->password = strtok(NULL, delimiter);
 
-    printf("%s\n", usr->password);
+    memcpy(mySelf->nome, usr->name, strlen(usr->name) + 1);
+    memcpy(mySelf->cognome, usr->surname, strlen(usr->surname) + 1);
+    memcpy(mySelf->username, usr->username, strlen(usr->username) + 1);
+    memcpy(mySelf->password, usr->password, strlen(usr->password) + 1);
+
+    printf("%s\n", mySelf->password);
 
     // Chiudi il file
     fclose(file);
@@ -683,38 +751,41 @@ struct user* readInformationsUser(const char* filename) {
 
 int checkExistingUser(const char* username, const char* pwd) {
 
-    const char* directoryPath = "./registered"; // Specifica il percorso della cartella
+    const char* directoryPath = "../client/registered"; // Specifica il percorso della cartella
     const char* searchString = username; // Stringa da confrontare con i nomi dei file
 
-    DIR* directory = opendir(directoryPath);
-    if (directory == NULL) {
-        printf("Impossibile aprire la directory.\n");
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s/%s", directoryPath, username, username);
+    printf("PATH: %s\n", path);
+
+    FILE* file = fopen(path, "r");
+    if (file == NULL) {
+        perror("Errore nell'apertura del file");
+        return 0;
+    }
+
+    // Leggi il file riga per riga utilizzando fgets
+    char buffer[256];
+    fgets(buffer, sizeof(buffer), file);
+
+    const char delimiter[] = ":";
+
+    strncpy(mySelf->nome, strtok(buffer, delimiter), BUFFER_SIZE);
+    strncpy(mySelf->cognome, strtok(NULL, delimiter), BUFFER_SIZE);
+    strncpy(mySelf->username, strtok(NULL, delimiter), BUFFER_SIZE);
+    strncpy(mySelf->password, strtok(NULL, delimiter), BUFFER_SIZE);
+
+    printf("Name: %s\n", mySelf->nome);
+    printf("Surname: %s\n", mySelf->cognome);
+    printf("Username: %s\n", mySelf->username);
+    printf("Password: %s\n", mySelf->password);
+
+    if (!strcmp(username, mySelf->username) && !strcmp(pwd, mySelf->password)) {
+        printf("Informazioni corrette, grant access\n");
+        // Chiudi il file
+        fclose(file);
         return 1;
     }
-
-    struct dirent* entry;
-    while ((entry = readdir(directory)) != NULL) {
-        if (entry->d_type == DT_REG) { // Controlla solo i file regolari
-            if (strcmp(entry->d_name, searchString) == 0) {
-                printf("\nTrovato il file corrispondente: %s\n", entry->d_name);
-
-                /* Read the informations of the user */
-                struct user *existingUser = readInformationsUser(entry->d_name);
-
-                if (strcmp(existingUser->password, pwd) == 0) {
-                    printf("Password corretta, welcome!\n");
-
-                }
-
-                return 1;
-            }
-        }
-    }
-
-    closedir(directory);
-
-    return 0;
-
 }
 
 int login_executor(char* arg, struct peer_info *peer) {
@@ -723,12 +794,12 @@ int login_executor(char* arg, struct peer_info *peer) {
     char *username = strtok(arg, delimiter);
     char *password = strtok(NULL, delimiter);
 
-    if (checkExistingUser(username, password)) {
+    if (checkExistingUser(username, username)) {
         printf("\nInformation retrieved successfully\n");
         logged = 1;
+        initializePaths();
     }
 }
-
 
 
 void print_help(){
@@ -979,7 +1050,37 @@ DH* create_dh_params()
     return dh;
 }
 
-int _executor(char* message, struct peer_info *peer) {
+void send_signed_message(int socket, const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length) {
+    // Calcola la dimensione totale del buffer per il messaggio firmato
+    size_t total_length = message_length + signature_length;
+
+    // Alloca un buffer per il messaggio firmato
+    unsigned char* signed_message = (unsigned char*)malloc(total_length);
+    if (signed_message == NULL) {
+        perror("Failed to allocate memory for signed message");
+        return;
+    }
+
+    // Copia la firma nel buffer del messaggio firmato
+    memcpy(signed_message, signature, signature_length);
+
+    // Copia il messaggio nel buffer del messaggio firmato
+    memcpy(signed_message + signature_length, message, message_length);
+
+    // Invia il messaggio firmato sul socket
+    ssize_t bytes_sent = send(socket, signed_message, total_length, 0);
+    if (bytes_sent < 0) {
+        perror("Failed to send signed message");
+    }
+
+    // Libera la memoria allocata per il messaggio firmato
+    free(signed_message);
+}
+
+
+int start_executor(char* message, struct peer_info *peer) {
+
+    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
 
     // Message to be sent
     size_t message_len = strlen(message);
@@ -991,9 +1092,86 @@ int _executor(char* message, struct peer_info *peer) {
     // Encrypt the message
     encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
 
-    //print_hex(encrypted_message, encrypted_message_len, "Encrypted Text");
+    // Calcola l'hash del messaggio cifrato
+    unsigned char message_hash[SHA256_DIGEST_LENGTH];
+    SHA256(encrypted_message, encrypted_message_len, message_hash);
 
-    sendMessage(server_sock, encrypted_message, encrypted_message_len);
+    // Crea un contesto di firma
+    EVP_MD_CTX* sign_ctx = EVP_MD_CTX_new();
+    if (sign_ctx == NULL) {
+        fprintf(stderr, "Errore nella creazione del contesto di firma\n");
+        EVP_PKEY_free(privKey);
+        return 1;
+    }
+
+    // Inizializza l'operazione di firma
+    if (EVP_DigestSignInit(sign_ctx, NULL, EVP_sha256(), NULL, privKey) != 1) {
+        fprintf(stderr, "Errore nell'inizializzazione dell'operazione di firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 1;
+    }
+
+    // Aggiungi l'hash del messaggio cifrato all'operazione di firma
+    if (EVP_DigestSignUpdate(sign_ctx, message_hash, SHA256_DIGEST_LENGTH) != 1) {
+        fprintf(stderr, "Errore nell'aggiunta dell'hash al contesto di firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 1;
+    }
+
+    // Determina la dimensione della firma digitale
+    size_t signature_size;
+    if (EVP_DigestSignFinal(sign_ctx, NULL, &signature_size) != 1) {
+        fprintf(stderr, "Errore nel calcolo della dimensione della firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 1;
+    }
+
+    // Alloca memoria per la firma digitale
+    unsigned char* signature = (unsigned char*)malloc(signature_size);
+    if (signature == NULL) {
+        fprintf(stderr, "Errore nell'allocazione di memoria per la firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 1;
+    }
+
+    // Esegui la firma digitale
+    if (EVP_DigestSignFinal(sign_ctx, signature, &signature_size) != 1) {
+        fprintf(stderr, "Errore nella firma digitale\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        free(signature);
+        return 1;
+    }
+
+    print_hex(signature, signature_size, "SIGNATURE");
+
+    // Message to be sent
+    const char* msg = "9";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+
+    //print_hex(encrypted_message, encrypted_message_len, "Encrypted Text");
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(2);
+
+    // Invia il messaggio firmato
+    send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_size);
+
+    //sendMessage(server_sock, en_message, en_message_len);
+
+    //sendMessage(server_sock, encrypted_message, encrypted_message_len);
+
 }
 
 int get_executor() {
@@ -1223,6 +1401,13 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     peer->register_list = NULL;
     peer->port = 1024;
 
+    // Allocazione della variabile PeerInfo
+    mySelf= malloc(sizeof(PeerInfo));
+    if (mySelf == NULL) {
+        perror("Errore nell'allocazione di PeerInfo");
+        return;
+    }
+
     // Creazione del socket
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Errore nella creazione del socket");
@@ -1300,7 +1485,10 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
         strcat(credentials, " ");
         strcat(credentials, password);
 
+        printf("Credentials: %s", credentials);
+
         login_executor(credentials, peer);
+        registered = 1;
 
     } else if (answer == 'N' || answer == 'n') {
         printf("Per favore registrati.\n");
@@ -1311,21 +1499,24 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
 
     get_executor();
 
-    // Invio la mia public key al server cifrata
+    if (!registered) {
+        // Invio la mia public key al server cifrata
 
-    EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
+        EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
 
-    // Converti la chiave pubblica del server in formato PEM
-    BIO* bio = BIO_new(BIO_s_mem());
-    PEM_write_bio_PUBKEY(bio, pubKey);
+        // Converti la chiave pubblica del server in formato PEM
+        BIO* bio = BIO_new(BIO_s_mem());
+        PEM_write_bio_PUBKEY(bio, pubKey);
 
-    // Ottieni i dati dalla memoria BIO
-    char* pubkey_data;
-    size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
+        // Ottieni i dati dalla memoria BIO
+        char* pubkey_data;
+        size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
 
-    sendEncryptedPublicKey(server_sock, pubKey);
-    printf("Public key sent!\n %s", pubkey_data);
+        sendEncryptedPublicKey(server_sock, pubKey);
+        printf("Public key sent!\n %s", pubkey_data);
 
+        registered = 1;
+    }
 }
 
 cmd_executor executors[] = {

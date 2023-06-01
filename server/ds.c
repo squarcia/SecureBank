@@ -73,7 +73,7 @@ typedef struct peerInfo {
     char password[1024];
     float balance[1024];
 
-    EVP_PKEY *pubKey;
+    EVP_PKEY **pubKey;
 } PeerInfo;
 
 typedef struct {
@@ -808,6 +808,107 @@ int _handle_cmd() {
     return ris;
 }
 
+int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length, EVP_PKEY* public_key) {
+    // Calcola l'hash del messaggio originale
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(message, message_length, hash);
+
+    // Crea un contesto di verifica della firma
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("Failed to create signature verification context");
+        return 0;
+    }
+
+    // Inizializza il contesto di verifica della firma con la chiave pubblica
+    if (EVP_VerifyInit(ctx, EVP_sha256()) != 1) {
+        perror("Failed to initialize signature verification context");
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+
+    // Aggiungi l'hash del messaggio al contesto di verifica della firma
+    if (EVP_VerifyUpdate(ctx, hash, SHA256_DIGEST_LENGTH) != 1) {
+        perror("Failed to update signature verification context");
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+
+    // Verifica la firma utilizzando la chiave pubblica
+    int result = EVP_VerifyFinal(ctx, signature, signature_length, public_key);
+
+    // Pulisci il contesto di verifica della firma
+    EVP_MD_CTX_free(ctx);
+
+    return result;
+}
+
+int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, int client_socket) {
+
+    int result;
+
+    // Dimensione massima del buffer per il messaggio firmato
+    size_t max_length = BUFFER_SIZE + 256;
+
+    // Alloca un buffer per il messaggio firmato
+    unsigned char* signed_message = (unsigned char*)malloc(max_length);
+    if (signed_message == NULL) {
+        perror("Failed to allocate memory for signed message");
+        return -1;
+    }
+
+    // Ricevi il messaggio firmato dal socket
+    ssize_t bytes_received = recv(socket, signed_message, max_length, 0);
+    if (bytes_received < 0) {
+        perror("Failed to receive signed message");
+        free(signed_message);
+        return -1;
+    }
+
+    // Assegna la lunghezza totale del messaggio firmato
+    size_t total_length = (size_t)bytes_received;
+
+    // Assegna la lunghezza della firma (supponendo che sia fissa)
+    *signature_length = 256;
+
+    // Assegna la lunghezza del messaggio
+    *message_length = total_length - *signature_length;
+
+    // Alloca il buffer per la firma
+    *signature = (unsigned char*)malloc(*signature_length);
+    if (*signature == NULL) {
+        perror("Failed to allocate memory for signature");
+        free(signed_message);
+        return -1;
+    }
+
+    // Alloca il buffer per il messaggio
+    *message = (unsigned char*)malloc(*message_length);
+    if (*message == NULL) {
+        perror("Failed to allocate memory for message");
+        free(*signature);
+        free(signed_message);
+        return -1;
+    }
+
+    // Copia la firma dal messaggio firmato
+    memcpy(*signature, signed_message, *signature_length);
+
+    // Copia il messaggio dal messaggio firmato
+    memcpy(*message, signed_message + *signature_length, *message_length);
+
+    PeerInfo* retrievedPeer = get(&hashTable, client_socket);
+   // printf("Message: %s\n Firma: %s\n", *message, *signature);
+    printEvpKey((EVP_PKEY *) retrievedPeer->pubKey);
+    result = verify_signature(*message, *message_length, *signature, *signature_length, (EVP_PKEY *)retrievedPeer->pubKey);
+
+    return result;
+}
+
+
+
+
+
 
 int main() {
     int master_socket, new_socket, client_sockets[MAX_CLIENTS];
@@ -1023,9 +1124,33 @@ int main() {
                         break;
                     } else if (atoi(&destination) == 9) {
 
-                        printf("CIAO ADELMO :)");
+                        printf("MESSAGGIO FIRMATO\n");
+                        // Ricevi il messaggio firmato
+                        unsigned char* received_message;
+                        size_t received_message_length;
+                        unsigned char* received_signature;
+                        size_t received_signature_length;
+                        // Buffer to hold the decrypted message
+                        /*
 
+                        */
+                        int signatureValid = receive_signed_message(sd, &received_message, &received_message_length, &received_signature, &received_signature_length, sd);
 
+                        if (signatureValid) {
+
+                            printf("The message if correctly signed!\n\n");
+
+                            unsigned char decrypted_message[1024];
+                            size_t decrypted_message_len;
+
+                            // Decrypt the message
+                            decrypted_message_len = decrypt_message(received_message, received_message_length, decrypted_message);
+
+                            // Print the decrypted message
+                            printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
+                        }
+
+                        break;
                     }else {
                         printf("Public Key!\n");
 
