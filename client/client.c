@@ -1,11 +1,15 @@
 #define MAXLINE 1024
 #define PORT	 8080
 #define COMMANDS 6
-
-
+#define MAX_TRANSACTIONS 1000
 #define COMMAND_PREFIX '!'
 #define DELIM " "
-#define DELIM_NEIGHBOR ":"
+#define BUFFER_SIZE 1024
+#define KEY_LENGTH 16
+#define BUFFER_SIZE 1024
+#define MAX_KEY_SIZE 2048
+#define HMAC_SIZE 32
+#define NONCE_SIZE 16
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,21 +22,14 @@
 #include <time.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
-#include <dirent.h>
 #include <openssl/aes.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/rand.h>
 #include <openssl/hmac.h>
 #include <termios.h>
+#include <dirent.h>
 
-#define BUFFER_SIZE 1024
-#define KEY_LENGTH 16
-#define BUFFER_SIZE 1024
-#define MAX_KEY_SIZE 2048
-#define MAX_MESSAGE_SIZE 1460
-#define HMAC_SIZE 32
-#define NONCE_SIZE 16
 
 struct register_info {
 
@@ -81,18 +78,32 @@ struct map {
     int received;
 };
 
-typedef struct peerInfo {
+typedef struct {
+    int transaction_id;
+    char account_number[20];
+    double amount;
+    time_t timestamp;
+    // Altri campi pertinenti
+} Transaction;
+
+typedef struct {
+    Transaction* transactions;
+    int transaction_count;
+    // Altri campi della tabella hash
+} TransactionTable;
+
+typedef struct {
     int port;
     char dataRemota[1024];
-
     char nome[1024];
     char cognome[1024];
     char username[1024];
     char password[1024];
-    float balance[1024];
-
+    float balance;
     EVP_PKEY **pubKey;
+    TransactionTable transaction_table;
 } PeerInfo;
+
 
 typedef int (*cmd_executor)(char* arg, struct peer_info *peer);
 
@@ -188,6 +199,65 @@ void inserisciRegistro(struct register_info *item, struct peer_info *peer) {
     numRegister++;
 }
 
+void add(int port, const char* dataRemota, const char* nome, const char* cognome, const char* username, const char* password, float balance) {
+
+    strncpy(mySelf->nome, nome, sizeof(mySelf->nome));
+    strncpy(mySelf->cognome, cognome, sizeof(mySelf->cognome));
+    strncpy(mySelf->username, username, sizeof(mySelf->username));
+    strncpy(mySelf->password, password, sizeof(mySelf->password));
+    mySelf->balance = balance;
+    printf("Nuovo peer aggiunto con successo\n");
+}
+
+void addTransaction(Transaction transaction) {
+    if (mySelf->transaction_table.transaction_count >= MAX_TRANSACTIONS) {
+        printf("Numero massimo di transazioni raggiunto\n");
+        return;
+    }
+
+    // Aggiungi la transazione alla tabella hash delle transazioni
+    mySelf->transaction_table.transactions[mySelf->transaction_table.transaction_count] = transaction;
+    mySelf->transaction_table.transaction_count++;
+
+    printf("Nuova transazione aggiunta con successo\n");
+}
+
+Transaction* getTransaction(int transaction_id) {
+    for (int i = 0; i < mySelf->transaction_table.transaction_count; i++) {
+        if (mySelf->transaction_table.transactions[i].transaction_id == transaction_id) {
+            return &mySelf->transaction_table.transactions[i];
+        }
+    }
+}
+
+void printDate(time_t currentTime) {
+
+    // Converti il timestamp in una struttura tm
+    struct tm* timeinfo = localtime(&currentTime);
+
+    // Formatta la data nel formato desiderato
+    char formattedTime[50];
+    strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S", timeinfo);
+
+    // Stampa la data formattata
+    printf("Data e ora correnti: %s\n", formattedTime);
+}
+
+Transaction createTransaction(int trans_id, const char* account_num, float amount) {
+
+    // Creazione e inserimento di una nuova transazione
+    Transaction newTransaction;
+    newTransaction.transaction_id = mySelf->transaction_table.transaction_count;
+    strcpy(newTransaction.account_number, "ABC123");
+    newTransaction.amount = 500.0;
+
+    // Imposta la data di oggi come timestamp
+    time_t currentTime = time(NULL);
+    newTransaction.timestamp = currentTime;
+
+    return newTransaction;
+}
+
 void verifyTime(struct peer_info *peer, int chiusura_forzata) {
 
     char *hour, *data, *today, *filename;
@@ -254,75 +324,17 @@ void verifyTime(struct peer_info *peer, int chiusura_forzata) {
     }
 }
 
-int add_executor(char* arg, struct peer_info *peer) {
+void print_hex(const unsigned char* data, size_t data_len, const unsigned char* title) {
 
-    char *token, *quantity, *type;
-    char *entry;
-    char *date;
-    FILE *fp;
+    printf("%s:\t", title);
 
-    struct register_info *temp = peer->register_list;
-
-    printf("\n\n\n\t\t\t  **********   ADD EXECUTOR RUNNING   **********\n\n");
-
-    /* Verifico se posso inserire la nuova entry nel register corrente */
-    verifyTime(peer, 0);
-
-    /* Scorro fino all'ultimo elemento della lista */
-    while (temp->next!= NULL)
-        temp = temp->next;
-
-    /* Ricavo il tipo */
-    token=strtok(arg, DELIM);
-    type = token;
-
-    /* Ricavo la quantità */
-    token=strtok(NULL, DELIM);
-    quantity = token;
-
-    /* Confronto il tipo inserito con le due costanti TAMPONE e NUOVO_CASO */
-    if (strcmp(type, types[0]) != 0 && strcmp(type, types[1]) != 0) {
-        printf("Errore, tipo non valido!");
-        return -1;
+    for (size_t i = 0; i < data_len; i++) {
+        printf("%02X", data[i]);
     }
-
-    printf("  TYPE :        [  %s  ]\n\n", type);
-    printf("  QUANTITY :    [  %s  ]\n\n", quantity);
-
-    /* Allocazione memoria */
-    entry = (char *) malloc(MAXLINE);
-    date = (char *) malloc(MAXLINE);
-
-    /* Pulizia */
-    memset(entry, 0, MAXLINE);
-    memset(date, 0, MAXLINE);
-
-    /* Mi ricavo la data in base al numero di register già inseriti */
-    getData(date, numRegister - 1);
-
-    printf("  DATA :        [  %s  ]\n\n", date);
-    printf("  FILE :        [  %s  ]\n\n", temp->filename);
-
-    /* Serializzazione */
-    sprintf(entry, "%s,%s,%s.\n",date, type, quantity);
-
-    /* Gestione del file */
-    fp = fopen(temp->filename, "a+");
-    fprintf(fp, "%s", entry);
-    fclose(fp);
-
-    printf("\n\n\t\t\t       [  NUOVO ENTRY INSERITA CON SUCCESSO!  ]\n\n");
-
-    /* Deallocazione */
-    free(entry);
-    free(date);
-
-    return 0;
+    printf("\n");
 }
 
 
-int stop_executor(char* arg, struct peer_info *peer) {
-}
 
 void sendPublicKey(int socket, EVP_PKEY* publicKey) {
     // Ottieni la dimensione del buffer necessario per la serializzazione
@@ -559,6 +571,105 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
     return keypair;
 }
 
+int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length) {
+    // Calcola l'hash del messaggio originale
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(message, message_length, hash);
+
+    // Crea un contesto di verifica della firma
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("Failed to create signature verification context");
+        return 0;
+    }
+
+    // Inizializza il contesto di verifica della firma con la chiave pubblica
+    if (EVP_VerifyInit(ctx, EVP_sha256()) != 1) {
+        perror("Failed to initialize signature verification context");
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+
+    // Aggiungi l'hash del messaggio al contesto di verifica della firma
+    if (EVP_VerifyUpdate(ctx, hash, SHA256_DIGEST_LENGTH) != 1) {
+        perror("Failed to update signature verification context");
+        EVP_MD_CTX_free(ctx);
+        return 0;
+    }
+
+    printEvpKey(serverPublicKey);
+
+    // Verifica la firma utilizzando la chiave pubblica
+    int result = EVP_VerifyFinal(ctx, signature, signature_length, serverPublicKey);
+
+    // Pulisci il contesto di verifica della firma
+    EVP_MD_CTX_free(ctx);
+
+    return result;
+}
+
+int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length) {
+
+    int result;
+
+    // Dimensione massima del buffer per il messaggio firmato
+    size_t max_length = BUFFER_SIZE + 256;
+
+    // Alloca un buffer per il messaggio firmato
+    unsigned char* signed_message = (unsigned char*)malloc(max_length);
+    if (signed_message == NULL) {
+        perror("Failed to allocate memory for signed message");
+        return -1;
+    }
+
+    // Ricevi il messaggio firmato dal socket
+    ssize_t bytes_received = recv(socket, signed_message, max_length, 0);
+    if (bytes_received < 0) {
+        perror("Failed to receive signed message");
+        free(signed_message);
+        return -1;
+    }
+
+    // Assegna la lunghezza totale del messaggio firmato
+    size_t total_length = (size_t)bytes_received;
+
+    // Assegna la lunghezza della firma (supponendo che sia fissa)
+    *signature_length = 256;
+
+    // Assegna la lunghezza del messaggio
+    *message_length = total_length - *signature_length;
+
+    // Alloca il buffer per la firma
+    *signature = (unsigned char*)malloc(*signature_length);
+    if (*signature == NULL) {
+        perror("Failed to allocate memory for signature");
+        free(signed_message);
+        return -1;
+    }
+
+    // Alloca il buffer per il messaggio
+    *message = (unsigned char*)malloc(*message_length);
+    if (*message == NULL) {
+        perror("Failed to allocate memory for message");
+        free(*signature);
+        free(signed_message);
+        return -1;
+    }
+
+    // Copia la firma dal messaggio firmato
+    memcpy(*signature, signed_message, *signature_length);
+
+    // Copia il messaggio dal messaggio firmato
+    memcpy(*message, signed_message + *signature_length, *message_length);
+
+    print_hex(*message, *message_length, "ENCRYPTED MESSAGE");
+
+    result = verify_signature(*message, *message_length, *signature, *signature_length);
+
+    return result;
+}
+
+
 
 int register_executor() {
 
@@ -703,11 +814,13 @@ void initializePaths() {
     snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
     snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
 
-    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+    //EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
 
-    printPrivateKey(privKey);
+    //printPrivateKey(privKey);
 
-    printf("INITIALISE PATHS: %s", pathPrivK);
+    mySelf->pubKey = readPublicKeyFromPEM(pathPubK);
+
+    //printEvpKey(mySelf->pubKey);
 }
 
 struct user* readInformationsUser(const char* filename) {
@@ -851,15 +964,6 @@ EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
     return publicKey;
 }
 
-void print_hex(const unsigned char* data, size_t data_len, const unsigned char* title) {
-
-    printf("%s:\t", title);
-
-    for (size_t i = 0; i < data_len; i++) {
-        printf("%02X", data[i]);
-    }
-    printf("\n");
-}
 
 void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned char* key, size_t key_len, unsigned char* hmac) {
     HMAC_CTX* ctx = HMAC_CTX_new();
@@ -1077,7 +1181,108 @@ void send_signed_message(int socket, const unsigned char* message, size_t messag
     free(signed_message);
 }
 
+ssize_t signMessage(const unsigned char* encrypted_message, size_t encrypted_message_len, unsigned char* signature) {
 
+    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+
+    // Calcola l'hash del messaggio cifrato
+    unsigned char message_hash[SHA256_DIGEST_LENGTH];
+    SHA256(encrypted_message, encrypted_message_len, message_hash);
+
+    // Crea un contesto di firma
+    EVP_MD_CTX* sign_ctx = EVP_MD_CTX_new();
+    if (sign_ctx == NULL) {
+        fprintf(stderr, "Errore nella creazione del contesto di firma\n");
+        EVP_PKEY_free(privKey);
+        return 0;
+    }
+
+    // Inizializza l'operazione di firma
+    if (EVP_DigestSignInit(sign_ctx, NULL, EVP_sha256(), NULL, privKey) != 1) {
+        fprintf(stderr, "Errore nell'inizializzazione dell'operazione di firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 0;
+    }
+
+    // Aggiungi l'hash del messaggio cifrato all'operazione di firma
+    if (EVP_DigestSignUpdate(sign_ctx, message_hash, SHA256_DIGEST_LENGTH) != 1) {
+        fprintf(stderr, "Errore nell'aggiunta dell'hash al contesto di firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 0;
+    }
+
+    // Determina la dimensione della firma digitale
+    size_t signature_size;
+    if (EVP_DigestSignFinal(sign_ctx, NULL, &signature_size) != 1) {
+        fprintf(stderr, "Errore nel calcolo della dimensione della firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 0;
+    }
+
+    // Alloca memoria per la firma digitale
+    if (signature == NULL) {
+        fprintf(stderr, "Errore nell'allocazione di memoria per la firma\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 0;
+    }
+
+    // Esegui la firma digitale
+    if (EVP_DigestSignFinal(sign_ctx, signature, &signature_size) != 1) {
+        fprintf(stderr, "Errore nella firma digitale\n");
+        EVP_PKEY_free(privKey);
+        EVP_MD_CTX_free(sign_ctx);
+        return 0;
+    }
+
+    print_hex(signature, signature_size, "SIGNATURE");
+
+    return signature_size;
+}
+
+void saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction) {
+
+    unsigned char decrypted_message[1024];
+    size_t decrypted_message_len;
+
+    decrypted_message_len = decrypt_message(received, rec_len, decrypted_message);
+    printf("Msg: %s", decrypted_message);
+
+    if(!strcmp(decrypted_message, "OK Va bene")) {
+
+        char* name = NULL;
+        char* amount = NULL;
+
+        // Primo token
+        char* token = strtok(transaction, " ");
+        if (token != NULL) {
+            name = strdup(token);
+        }
+
+        // Secondo token
+        token = strtok(NULL, " ");
+        if (token != NULL) {
+            amount = strdup(token);
+        }
+
+        // Stampa dei token ottenuti
+        printf("Token1: %s\n", name);
+        printf("Token2: %s\n", amount);
+
+        int amountOfMoney = atoi(amount);
+
+        Transaction t = createTransaction(0, name, amountOfMoney);
+        addTransaction(t);
+
+    }
+
+    printf("TRANSAZIONE SALVATA CON SUCCESSO!\n\n");
+}
+
+// Funzione per inviare soldi a un'altra persona
 int start_executor(char* message, struct peer_info *peer) {
 
     EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
@@ -1092,62 +1297,9 @@ int start_executor(char* message, struct peer_info *peer) {
     // Encrypt the message
     encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
 
-    // Calcola l'hash del messaggio cifrato
-    unsigned char message_hash[SHA256_DIGEST_LENGTH];
-    SHA256(encrypted_message, encrypted_message_len, message_hash);
-
-    // Crea un contesto di firma
-    EVP_MD_CTX* sign_ctx = EVP_MD_CTX_new();
-    if (sign_ctx == NULL) {
-        fprintf(stderr, "Errore nella creazione del contesto di firma\n");
-        EVP_PKEY_free(privKey);
-        return 1;
-    }
-
-    // Inizializza l'operazione di firma
-    if (EVP_DigestSignInit(sign_ctx, NULL, EVP_sha256(), NULL, privKey) != 1) {
-        fprintf(stderr, "Errore nell'inizializzazione dell'operazione di firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 1;
-    }
-
-    // Aggiungi l'hash del messaggio cifrato all'operazione di firma
-    if (EVP_DigestSignUpdate(sign_ctx, message_hash, SHA256_DIGEST_LENGTH) != 1) {
-        fprintf(stderr, "Errore nell'aggiunta dell'hash al contesto di firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 1;
-    }
-
-    // Determina la dimensione della firma digitale
+    unsigned char* signature;
     size_t signature_size;
-    if (EVP_DigestSignFinal(sign_ctx, NULL, &signature_size) != 1) {
-        fprintf(stderr, "Errore nel calcolo della dimensione della firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 1;
-    }
-
-    // Alloca memoria per la firma digitale
-    unsigned char* signature = (unsigned char*)malloc(signature_size);
-    if (signature == NULL) {
-        fprintf(stderr, "Errore nell'allocazione di memoria per la firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 1;
-    }
-
-    // Esegui la firma digitale
-    if (EVP_DigestSignFinal(sign_ctx, signature, &signature_size) != 1) {
-        fprintf(stderr, "Errore nella firma digitale\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        free(signature);
-        return 1;
-    }
-
-    print_hex(signature, signature_size, "SIGNATURE");
+    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
 
     // Message to be sent
     const char* msg = "9";
@@ -1160,17 +1312,172 @@ int start_executor(char* message, struct peer_info *peer) {
     // Encrypt the message
     en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
 
-    //print_hex(encrypted_message, encrypted_message_len, "Encrypted Text");
     sendMessage(server_sock, en_message, en_message_len);
 
     sleep(2);
 
     // Invia il messaggio firmato
     send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_size);
+    sleep(2);
 
-    //sendMessage(server_sock, en_message, en_message_len);
+    // Ricevi il messaggio firmato
+    unsigned char* rec;
+    size_t rec_l;
+    unsigned char* rec_s;
+    size_t rec_s_l;
 
-    //sendMessage(server_sock, encrypted_message, encrypted_message_len);
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
+
+    print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
+    printf("DOPO FIRMA: %d", signatureValid);
+
+    saveTransaction(rec, rec_l, message);
+
+    Transaction *t1 = getTransaction(0);
+
+    printDate(t1->timestamp);
+
+    return 1;
+
+}
+/*
+void overwriteFolderContents(const char* folderPath) {
+    // Elimina i file esistenti nella cartella
+    DIR* dir = opendir(folderPath);
+    if (dir != NULL) {
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+                char filePath[1024];
+                snprintf(filePath, sizeof(filePath), "%s/%s", folderPath, entry->d_name);
+                remove(filePath);
+            }
+        }
+        closedir(dir);
+    }
+}
+
+void savePeerInfo() {
+    // Crea il percorso completo della cartella con il nome "username"
+    char folderPath[1024];
+    snprintf(folderPath, sizeof(folderPath), "../client/registered/%s/%s", mySelf->username, mySelf->username);
+
+    overwriteFolderContents(folderPath);
+
+    printf("NOME: %s", mySelf->nome);
+    // Apri il file per scrivere i dati
+    FILE* file = fopen(folderPath, "w");
+    if (file == NULL) {
+        perror("Failed to open file for writing");
+        return;
+    }
+
+    // Scrivi i dati nella cartella nel formato specificato
+    fprintf(file, "%s:%s:%s:%s:%f",
+            mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
+
+    char folderPathTransactions[1024];
+    snprintf(folderPathTransactions, sizeof(folderPath), "../client/registered/%s/transactions", mySelf->username);
+
+    overwriteFolderContents(folderPathTransactions);
+
+    // Apri il file per scrivere i dati
+    FILE* fileTransactions = fopen(folderPathTransactions, "w");
+    if (file == NULL) {
+        perror("Failed to open file for writing");
+        return;
+    }
+
+    // Scrivi i dati della transaction_table
+    for (int i = 0; i < mySelf->transaction_table.transaction_count; i++) {
+        Transaction* transaction = &mySelf->transaction_table.transactions[i];
+        fprintf(fileTransactions, "%d,%s,%.2f,%ld", transaction->transaction_id, transaction->account_number,
+                transaction->amount, (long)transaction->timestamp);
+    }
+    // Chiudi il file
+    fclose(fileTransactions);
+
+    printf("PeerInfo salvato correttamente.\n");
+}
+
+PeerInfo loadPeerInfo() {
+    PeerInfo peerInfo;
+
+    // Crea il percorso completo della cartella con il nome "username"
+    char folderPath[1024];
+    snprintf(folderPath, sizeof(folderPath), "../client/registered/%s/%s", mySelf->username, mySelf->username);
+
+    // Apri il file per leggere i dati
+    FILE* file = fopen(folderPath, "r");
+    if (file == NULL) {
+        perror("Failed to open file for reading");
+        memset(&peerInfo, 0, sizeof(PeerInfo));
+        return peerInfo;
+    }
+
+    // Leggi i dati dal file nel formato specificato
+    fscanf(file, "%d:%[^:]:%[^:]:%[^:]:%[^:]:%[^:]:%f", &peerInfo.port, peerInfo.dataRemota,
+           peerInfo.nome, peerInfo.cognome, peerInfo.username, peerInfo.password, &peerInfo.balance);
+
+    // Chiudi il file
+    fclose(file);
+
+    // Crea il percorso completo del file delle transazioni
+    char transactionsFilePath[1024];
+    snprintf(transactionsFilePath, sizeof(transactionsFilePath), "../client/registered/%s/transactions", mySelf->username);
+
+    // Apri il file delle transazioni per leggere i dati
+    FILE* transactionsFile = fopen(transactionsFilePath, "r");
+    if (transactionsFile == NULL) {
+        perror("Failed to open transactions file for reading");
+        peerInfo.transaction_table.transaction_count = 0;
+        peerInfo.transaction_table.transactions = NULL;
+        return peerInfo;
+    }
+
+    // Conta il numero di transazioni nel file
+    int transactionCount = 0;
+    char line[1024];
+    while (fgets(line, sizeof(line), transactionsFile) != NULL) {
+        transactionCount++;
+    }
+
+    // Alloca l'array di transazioni
+    peerInfo.transaction_table.transaction_count = transactionCount;
+    peerInfo.transaction_table.transactions = (Transaction*)malloc(transactionCount * sizeof(Transaction));
+    if (peerInfo.transaction_table.transactions == NULL) {
+        perror("Failed to allocate memory for transactions");
+        peerInfo.transaction_table.transaction_count = 0;
+        return peerInfo;
+    }
+
+    // Riavvolgi il file delle transazioni
+    rewind(transactionsFile);
+
+    // Leggi i dati delle transazioni dal file
+    int index = 0;
+    while (fgets(line, sizeof(line), transactionsFile) != NULL && index < transactionCount) {
+        Transaction* transaction = &peerInfo.transaction_table.transactions[index];
+        sscanf(line, "%d,%[^,],%lf,%ld", &transaction->transaction_id, transaction->account_number,
+               &transaction->amount, &transaction->timestamp);
+        index++;
+    }
+
+    // Chiudi il file delle transazioni
+    fclose(transactionsFile);
+
+    printf("PeerInfo caricato correttamente.\n");
+
+    return peerInfo;
+}
+*/
+
+int stop_executor(char* arg, struct peer_info *peer) {
+
+
+}
+
+int add_executor(char* arg, struct peer_info *peer) {
 
 }
 
@@ -1258,13 +1565,6 @@ int get_executor() {
     printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
 }
 
-void generateIV(unsigned char* iv, size_t iv_len) {
-
-    if (RAND_bytes(iv, iv_len) != 1) {
-        perror("Failed to generate random IV");
-        exit(EXIT_FAILURE);
-    }
-}
 
 int verifySelfSignedCertificate(const char* certFile) {
     // Load the self-signed certificate from file
@@ -1402,11 +1702,14 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     peer->port = 1024;
 
     // Allocazione della variabile PeerInfo
-    mySelf= malloc(sizeof(PeerInfo));
+    mySelf = malloc(sizeof(PeerInfo));
     if (mySelf == NULL) {
         perror("Errore nell'allocazione di PeerInfo");
         return;
     }
+    // Inizializza la tabella hash delle transazioni
+    mySelf->transaction_table.transactions = malloc(MAX_TRANSACTIONS * sizeof(Transaction));
+    mySelf->transaction_table.transaction_count = 0;
 
     // Creazione del socket
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -1627,7 +1930,6 @@ int main() {
         read_fds = master;
 
         select(fdmax + 1, &read_fds, NULL, NULL, NULL);
-
         for (i=0; i<=fdmax; i++) {
 
             if(FD_ISSET(i, &read_fds)) {
