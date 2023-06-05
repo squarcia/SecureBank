@@ -334,43 +334,6 @@ void print_hex(const unsigned char* data, size_t data_len, const unsigned char* 
     printf("\n");
 }
 
-
-
-void sendPublicKey(int socket, EVP_PKEY* publicKey) {
-    // Ottieni la dimensione del buffer necessario per la serializzazione
-    int bufferSize = i2d_PUBKEY(publicKey, NULL);
-    if (bufferSize < 0) {
-        perror("Failed to get buffer size for public key");
-        return;
-    }
-
-    // Alloca il buffer per la serializzazione
-    unsigned char* buffer = (unsigned char*)malloc(bufferSize);
-    if (buffer == NULL) {
-        perror("Failed to allocate memory for public key serialization");
-        return;
-    }
-
-    // Serializza la chiave pubblica nel buffer
-    unsigned char* bufferPtr = buffer;
-    int result = i2d_PUBKEY(publicKey, &bufferPtr);
-    if (result < 0) {
-        perror("Failed to serialize public key");
-        free(buffer);
-        return;
-    }
-
-    // Invia i dati della chiave pubblica sul socket
-    result = send(socket, buffer, bufferSize, 0);
-    if (result < 0) {
-        perror("Failed to send public key");
-        free(buffer);
-        return;
-    }
-
-    free(buffer);
-}
-
 void sendPublicKeyWith4(int socket, EVP_PKEY* publicKey) {
     // Ottieni la dimensione del buffer necessario per la serializzazione
     int bufferSize = i2d_PUBKEY(publicKey, NULL);
@@ -566,7 +529,7 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
         return NULL;
     }
 
-   // printPrivateKey(server_privkey);
+    // printPrivateKey(server_privkey);
 
     return keypair;
 }
@@ -802,27 +765,6 @@ int register_executor() {
     generate_keypair(pathPrivK, pathPubK);
 }
 
-void initializePaths() {
-
-    char folderpath[256];
-
-    const char *directory = "../client/registered";
-    const char *filename = mySelf->username;
-
-    snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
-
-    snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
-    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
-
-    //EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
-
-    //printPrivateKey(privKey);
-
-    mySelf->pubKey = readPublicKeyFromPEM(pathPubK);
-
-    //printEvpKey(mySelf->pubKey);
-}
-
 struct user* readInformationsUser(const char* filename) {
 
     // Apri il file in modalità lettura
@@ -901,18 +843,6 @@ int checkExistingUser(const char* username, const char* pwd) {
     }
 }
 
-int login_executor(char* arg, struct peer_info *peer) {
-
-    const char delimiter[] = " ";
-    char *username = strtok(arg, delimiter);
-    char *password = strtok(NULL, delimiter);
-
-    if (checkExistingUser(username, username)) {
-        printf("\nInformation retrieved successfully\n");
-        logged = 1;
-        initializePaths();
-    }
-}
 
 
 void print_help(){
@@ -1125,6 +1055,60 @@ size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, u
     return plaintext_len;
 }
 
+void updateBalance() {
+
+    // send request to receive updated balance
+    // Message to be sent
+    const char* msg = "7";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(2);
+
+    // Ricevi il messaggio firmato
+    unsigned char* rec;
+    size_t rec_l;
+    unsigned char* rec_s;
+    size_t rec_s_l;
+    unsigned char* decrypted_message;
+
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
+
+    print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
+    printf("DOPO FIRMA: %d", signatureValid);
+
+    if (signatureValid) {
+
+        printf("The message is correctly signed!\n\n");
+
+        // Decrypt the message
+        int decrypted_message_len = decrypt_message(rec, rec_l, decrypted_message);
+
+        // Print the decrypted message
+        printf("Balance updated: %s\n", decrypted_message);
+    }
+
+}
+
+void seeBalance() {
+    updateBalance();
+    printf("Balance: %f", mySelf->balance);
+}
+
+int stop_executor(char* arg, struct peer_info *peer) {
+
+    seeBalance();
+
+}
+
 
 DH* create_dh_params()
 {
@@ -1243,7 +1227,7 @@ ssize_t signMessage(const unsigned char* encrypted_message, size_t encrypted_mes
     return signature_size;
 }
 
-void saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction) {
+int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction) {
 
     unsigned char decrypted_message[1024];
     size_t decrypted_message_len;
@@ -1276,10 +1260,50 @@ void saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tr
 
         Transaction t = createTransaction(0, name, amountOfMoney);
         addTransaction(t);
+        printf("TRANSAZIONE SALVATA CON SUCCESSO!\n\n");
+        return 1;
 
+    } else {
+        printf("TRANSAZIONE FALLITA!\n\n");
+        return -1;
+    }
+}
+
+void sendPublicKey(int socket, EVP_PKEY* publicKey) {
+
+
+    // Ottieni la dimensione del buffer necessario per la serializzazione
+    int bufferSize = i2d_PUBKEY(publicKey, NULL);
+    if (bufferSize < 0) {
+        perror("Failed to get buffer size for public key");
+        return;
     }
 
-    printf("TRANSAZIONE SALVATA CON SUCCESSO!\n\n");
+    // Alloca il buffer per la serializzazione
+    unsigned char* buffer = (unsigned char*)malloc(bufferSize);
+    if (buffer == NULL) {
+        perror("Failed to allocate memory for public key serialization");
+        return;
+    }
+
+    // Serializza la chiave pubblica nel buffer
+    unsigned char* bufferPtr = buffer;
+    int result = i2d_PUBKEY(publicKey, &bufferPtr);
+    if (result < 0) {
+        perror("Failed to serialize public key");
+        free(buffer);
+        return;
+    }
+
+    // Invia i dati della chiave pubblica sul socket
+    result = send(socket, buffer, bufferSize, 0);
+    if (result < 0) {
+        perror("Failed to send public key");
+        free(buffer);
+        return;
+    }
+
+    free(buffer);
 }
 
 // Funzione per inviare soldi a un'altra persona
@@ -1331,154 +1355,119 @@ int start_executor(char* message, struct peer_info *peer) {
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
 
-    saveTransaction(rec, rec_l, message);
+    int result = saveTransaction(rec, rec_l, message);
 
-    Transaction *t1 = getTransaction(0);
-
-    printDate(t1->timestamp);
+    if (result == 1) {
+        Transaction *t1 = getTransaction(0);
+        printDate(t1->timestamp);
+    }
 
     return 1;
 
 }
-/*
-void overwriteFolderContents(const char* folderPath) {
-    // Elimina i file esistenti nella cartella
-    DIR* dir = opendir(folderPath);
-    if (dir != NULL) {
-        struct dirent* entry;
-        while ((entry = readdir(dir)) != NULL) {
-            if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-                char filePath[1024];
-                snprintf(filePath, sizeof(filePath), "%s/%s", folderPath, entry->d_name);
-                remove(filePath);
-            }
-        }
-        closedir(dir);
-    }
+
+void initializePaths() {
+
+    char folderpath[256];
+
+    const char *directory = "../client/registered";
+    const char *filename = mySelf->username;
+
+    snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
+
+    snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
+    snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
+
+    //EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+
+    //printPrivateKey(privKey);
+
+    mySelf->pubKey = readPublicKeyFromPEM(pathPubK);
+    printEvpKey((EVP_PKEY *) mySelf->pubKey);
 }
 
-void savePeerInfo() {
-    // Crea il percorso completo della cartella con il nome "username"
-    char folderPath[1024];
-    snprintf(folderPath, sizeof(folderPath), "../client/registered/%s/%s", mySelf->username, mySelf->username);
+// Funzione per inviare soldi a un'altra persona
+int ssend(char* message, int socket) {
 
-    overwriteFolderContents(folderPath);
+    // Message to be sent
+    size_t message_len = strlen(message);
 
-    printf("NOME: %s", mySelf->nome);
-    // Apri il file per scrivere i dati
-    FILE* file = fopen(folderPath, "w");
-    if (file == NULL) {
-        perror("Failed to open file for writing");
-        return;
-    }
+    // Buffer to hold the encrypted message
+    unsigned char encrypted_message[1024];
+    size_t encrypted_message_len;
 
-    // Scrivi i dati nella cartella nel formato specificato
-    fprintf(file, "%s:%s:%s:%s:%f",
-            mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
+    // Encrypt the message
+    encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
 
-    char folderPathTransactions[1024];
-    snprintf(folderPathTransactions, sizeof(folderPath), "../client/registered/%s/transactions", mySelf->username);
+    print_hex(encrypted_message, encrypted_message_len, "ENCRYPTED MESSAGE");
+    sleep(2);
 
-    overwriteFolderContents(folderPathTransactions);
-
-    // Apri il file per scrivere i dati
-    FILE* fileTransactions = fopen(folderPathTransactions, "w");
-    if (file == NULL) {
-        perror("Failed to open file for writing");
-        return;
-    }
-
-    // Scrivi i dati della transaction_table
-    for (int i = 0; i < mySelf->transaction_table.transaction_count; i++) {
-        Transaction* transaction = &mySelf->transaction_table.transactions[i];
-        fprintf(fileTransactions, "%d,%s,%.2f,%ld", transaction->transaction_id, transaction->account_number,
-                transaction->amount, (long)transaction->timestamp);
-    }
-    // Chiudi il file
-    fclose(fileTransactions);
-
-    printf("PeerInfo salvato correttamente.\n");
+    unsigned char *signature = BIO_f_null;
+    size_t signature_size;
+    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
+    print_hex(signature, signature_size, "SIGNATURE");
+    // Invia il messaggio firmato
+    send_signed_message(socket, encrypted_message, encrypted_message_len, signature, signature_size);
 }
 
-PeerInfo loadPeerInfo() {
-    PeerInfo peerInfo;
+int add_executor() {
 
-    // Crea il percorso completo della cartella con il nome "username"
-    char folderPath[1024];
-    snprintf(folderPath, sizeof(folderPath), "../client/registered/%s/%s", mySelf->username, mySelf->username);
+    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
 
-    // Apri il file per leggere i dati
-    FILE* file = fopen(folderPath, "r");
-    if (file == NULL) {
-        perror("Failed to open file for reading");
-        memset(&peerInfo, 0, sizeof(PeerInfo));
-        return peerInfo;
-    }
+    // Calcola la lunghezza totale della stringa da inviare
+    int stringLength = snprintf(NULL, 0, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome,
+                                mySelf->username, mySelf->password, mySelf->balance);
 
-    // Leggi i dati dal file nel formato specificato
-    fscanf(file, "%d:%[^:]:%[^:]:%[^:]:%[^:]:%[^:]:%f", &peerInfo.port, peerInfo.dataRemota,
-           peerInfo.nome, peerInfo.cognome, peerInfo.username, peerInfo.password, &peerInfo.balance);
+    // Alloca memoria per la stringa risultante
+    char* message = malloc((stringLength + 1) * sizeof(char));
 
-    // Chiudi il file
-    fclose(file);
-
-    // Crea il percorso completo del file delle transazioni
-    char transactionsFilePath[1024];
-    snprintf(transactionsFilePath, sizeof(transactionsFilePath), "../client/registered/%s/transactions", mySelf->username);
-
-    // Apri il file delle transazioni per leggere i dati
-    FILE* transactionsFile = fopen(transactionsFilePath, "r");
-    if (transactionsFile == NULL) {
-        perror("Failed to open transactions file for reading");
-        peerInfo.transaction_table.transaction_count = 0;
-        peerInfo.transaction_table.transactions = NULL;
-        return peerInfo;
-    }
-
-    // Conta il numero di transazioni nel file
-    int transactionCount = 0;
-    char line[1024];
-    while (fgets(line, sizeof(line), transactionsFile) != NULL) {
-        transactionCount++;
-    }
-
-    // Alloca l'array di transazioni
-    peerInfo.transaction_table.transaction_count = transactionCount;
-    peerInfo.transaction_table.transactions = (Transaction*)malloc(transactionCount * sizeof(Transaction));
-    if (peerInfo.transaction_table.transactions == NULL) {
-        perror("Failed to allocate memory for transactions");
-        peerInfo.transaction_table.transaction_count = 0;
-        return peerInfo;
-    }
-
-    // Riavvolgi il file delle transazioni
-    rewind(transactionsFile);
-
-    // Leggi i dati delle transazioni dal file
-    int index = 0;
-    while (fgets(line, sizeof(line), transactionsFile) != NULL && index < transactionCount) {
-        Transaction* transaction = &peerInfo.transaction_table.transactions[index];
-        sscanf(line, "%d,%[^,],%lf,%ld", &transaction->transaction_id, transaction->account_number,
-               &transaction->amount, &transaction->timestamp);
-        index++;
-    }
-
-    // Chiudi il file delle transazioni
-    fclose(transactionsFile);
-
-    printf("PeerInfo caricato correttamente.\n");
-
-    return peerInfo;
-}
-*/
-
-int stop_executor(char* arg, struct peer_info *peer) {
+    // Costruisci la stringa formattata
+    sprintf(message, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome,
+            mySelf->username, mySelf->password, mySelf->balance);
 
 
+    // Buffer to hold the encrypted message
+    unsigned char encrypted_message[1024];
+    size_t encrypted_message_len;
+
+    // Encrypt the message
+    encrypted_message_len = encrypt_message((const unsigned char*)message, stringLength, encrypted_message);
+
+    unsigned char* signature;
+    size_t signature_size;
+    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
+
+    // Message to be sent
+    const char* msg = "8";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(2);
+
+    // Invia il messaggio firmato
+    send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_size);
+    sleep(2);
 }
 
-int add_executor(char* arg, struct peer_info *peer) {
+int login_executor(char* arg, struct peer_info *peer) {
 
+    const char delimiter[] = " ";
+    char *username = strtok(arg, delimiter);
+    char *password = strtok(NULL, delimiter);
+
+    if (checkExistingUser(username, username)) {
+        printf("\nInformation retrieved successfully\n");
+        logged = 1;
+        initializePaths();
+    }
 }
 
 int get_executor() {
@@ -1563,6 +1552,7 @@ int get_executor() {
 
     // Print the decrypted message
     printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
+
 }
 
 
@@ -1681,6 +1671,22 @@ void sendEncryptedPublicKey(int socket, EVP_PKEY* publicKey) {
 }
 
 
+void sendPubKey() {
+    // Invio la mia public key al server cifrata
+
+    EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
+
+    // Converti la chiave pubblica del server in formato PEM
+    BIO* bio = BIO_new(BIO_s_mem());
+    PEM_write_bio_PUBKEY(bio, pubKey);
+
+    // Ottieni i dati dalla memoria BIO
+    char* pubkey_data;
+    size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
+
+    sendEncryptedPublicKey(server_sock, pubKey);
+    printf("Public key sent!\n %s", pubkey_data);
+}
 
 void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
 
@@ -1802,24 +1808,8 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
 
     get_executor();
 
-    if (!registered) {
-        // Invio la mia public key al server cifrata
+    sendPubKey();
 
-        EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
-
-        // Converti la chiave pubblica del server in formato PEM
-        BIO* bio = BIO_new(BIO_s_mem());
-        PEM_write_bio_PUBKEY(bio, pubKey);
-
-        // Ottieni i dati dalla memoria BIO
-        char* pubkey_data;
-        size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
-
-        sendEncryptedPublicKey(server_sock, pubKey);
-        printf("Public key sent!\n %s", pubkey_data);
-
-        registered = 1;
-    }
 }
 
 cmd_executor executors[] = {
@@ -1950,19 +1940,8 @@ int main() {
                     } else {
                         strcpy(bufferNeighbor, bufferRicezione);
                     }
-
-                    if (atoi(bufferNeighbor) == 22) {
-
-                        printf("\n\t\t    SEI IL PRIMO PEER DEL NETWORK. PER ORA NON HAI NEIGHBORS.\n\n");
-                        break;
-                    }
-
-                    if (atoi(bufferNeighbor) == 11) {
-                        break;
-                    }
                 }
             }
         }
     }
-
 }

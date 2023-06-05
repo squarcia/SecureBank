@@ -11,6 +11,7 @@
 #include <openssl/pem.h>
 #include <openssl/rand.h>
 #include <openssl/hmac.h>
+#include <dirent.h>
 
 #define PORT	    8080
 #define MAXLINE     1024
@@ -64,7 +65,7 @@ typedef struct peerInfo {
     char cognome[1024];
     char username[1024];
     char password[1024];
-    float balance[1024];
+    float balance;
 
     EVP_PKEY **pubKey;
 } PeerInfo;
@@ -77,7 +78,10 @@ typedef struct {
 
 typedef struct {
     Entry* entries[TABLE_SIZE];
+    int size;
 } HashTable;
+
+
 
 EVP_PKEY *privateKey;
 
@@ -97,7 +101,7 @@ void initializeHashTable(HashTable* hashTable) {
         hashTable->entries[i] = NULL;
     }
 }
-
+/*
 // Inserisci un elemento nella tabella hash
 void insert(HashTable* hashTable, int key, const char* username, PeerInfo* value) {
     int index = hash(key);
@@ -111,7 +115,8 @@ void insert(HashTable* hashTable, int key, const char* username, PeerInfo* value
     // Inserisci la nuova entry nella posizione corrispondente
     hashTable->entries[index] = newEntry;
 }
-
+*/
+/*
 // Recupera un elemento dalla tabella hash
 PeerInfo* get(HashTable* hashTable, int key) {
     int index = hash(key);
@@ -123,6 +128,42 @@ PeerInfo* get(HashTable* hashTable, int key) {
     }
 
     // Elemento non trovato
+    return NULL;
+}
+*/
+Entry* findEntryByKey(HashTable* table, int key) {
+    int index = hash(key);
+    Entry* entry = table->entries[index];
+
+    if (entry != NULL && entry->key == key) {
+        return entry;
+    }
+
+    return NULL;
+}
+
+
+void insertEntry(HashTable* table, int key, const char* username, PeerInfo* value) {
+    int index = hash(key);
+
+    Entry* entry = (Entry*)malloc(sizeof(Entry));
+    entry->key = key;
+    strncpy(entry->username, username, sizeof(entry->username));
+    entry->value = value;
+
+    table->entries[index] = entry;
+    table->size++;
+}
+
+
+Entry* findEntryByUsername(HashTable* table, const char* username) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        Entry* entry = table->entries[i];
+        if (entry != NULL && strcmp(entry->username, username) == 0) {
+            return entry;
+        }
+    }
+
     return NULL;
 }
 
@@ -983,6 +1024,8 @@ int verify_signature(const unsigned char* message, size_t message_length, const 
         return 0;
     }
 
+    printf("\n\n\n chiave");
+    printEvpKey(public_key);
     // Verifica la firma utilizzando la chiave pubblica
     int result = EVP_VerifyFinal(ctx, signature, signature_length, public_key);
 
@@ -1046,8 +1089,10 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     // Copia il messaggio dal messaggio firmato
     memcpy(*message, signed_message + *signature_length, *message_length);
 
-    PeerInfo* retrievedPeer = get(&hashTable, socket);
-   // printf("Message: %s\n Firma: %s\n", *message, *signature);
+    PeerInfo* retrievedPeer = findEntryByKey(&hashTable, socket);
+    printf("PEER %d", socket);
+    printf("Pubkey: %d", retrievedPeer->pubKey);
+    // printf("Message: %s\n Firma: %s\n", *message, *signature);
     printEvpKey((EVP_PKEY *) retrievedPeer->pubKey);
     result = verify_signature(*message, *message_length, *signature, *signature_length, (EVP_PKEY *)retrievedPeer->pubKey);
 
@@ -1101,15 +1146,34 @@ void elaborateTransaction(unsigned char *message, int sd) {
     printf("Token1: %s\n", token1);
     printf("Token2: %s\n", token2);
 
-    // Deallocazione della memoria
+    // check user exists
+    Entry *dest = findEntryByUsername(&hashTable, token1);
+    Entry *mitt = findEntryByKey(&hashTable, sd);
+
+    if (dest != NULL) {
+        printf("Entry trovata per l'username '%s':\n", token1);
+        printf("Key: %d\n", dest->key);
+        printf("Username: %s\n", dest->username);
+        printf("Balance: %f\n", dest->value->balance);
+        // Modifica il campo port di PeerInfo
+        dest->value->balance += atof(token2);
+        mitt->value->balance -= atof(token2);
+        printf("Balance after: %f\n", dest->value->balance);
+        printf("Balance after: %f\n", mitt->value->balance);
+    }
+
+
+    if (dest == NULL) {
+        printf("Utente non esistente, riprovare");
+        // invia messaggio negativo
+        ssend("NOPE Non Va bene", sd);
+    } else {
+        // invia messaggio positivo
+        ssend("OK Va bene", sd);
+    }
+
     free(token1);
     free(token2);
-
-
-    // check user exists
-
-    // invia messaggio positivo
-    ssend("OK Va bene", sd);
 }
 
 EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_file) {
@@ -1193,6 +1257,85 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
     return keypair;
 }
 
+void readPeerInfoFromFolders(const char* parentFolder) {
+    // Apertura del parentFolder
+    DIR* dir = opendir(parentFolder);
+    if (dir == NULL) {
+        perror("Failed to open parent folder");
+        return;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        // Ignora le voci "." e ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Costruzione del percorso completo della sottocartella
+        char subFolderPath[1024];
+        snprintf(subFolderPath, sizeof(subFolderPath), "%s/%s", parentFolder, entry->d_name);
+
+        // Lettura dei file all'interno della sottocartella
+        char infoFilePath[1024];
+        char publicKeyFilePath[1024];
+
+        snprintf(infoFilePath, sizeof(infoFilePath), "%s/%s", subFolderPath, entry->d_name);
+        snprintf(publicKeyFilePath, sizeof(publicKeyFilePath), "%s/public_key", subFolderPath);
+
+        EVP_PKEY *pubKey = readPublicKeyFromPEM(publicKeyFilePath);
+
+        FILE* infoFile = fopen(infoFilePath, "r");
+        FILE* publicKeyFile = fopen(publicKeyFilePath, "r");
+
+        if (infoFile == NULL || publicKeyFile == NULL) {
+            // Errore nell'apertura di uno dei file, passa alla prossima sottocartella
+            perror("Failed to open file");
+            if (infoFile != NULL) fclose(infoFile);
+            if (publicKeyFile != NULL) fclose(publicKeyFile);
+            continue;
+        }
+
+        // Lettura dei dati dai file e inizializzazione del PeerInfo
+        PeerInfo peerInfo;
+
+        peerInfo.pubKey = pubKey;
+
+        if (fscanf(infoFile, "%[^:]:%[^:]:%[^:]:%[^:]",
+                   peerInfo.nome, peerInfo.cognome, peerInfo.username,
+                   peerInfo.password) != 4) {
+            // Errore nella lettura dei dati, passa alla prossima sottocartella
+            perror("Failed to read data from file");
+            fclose(infoFile);
+            fclose(publicKeyFile);
+            continue;
+        }
+
+        // ... Altre operazioni necessarie per leggere le chiavi pubbliche e private
+        // ...
+
+        insertEntry(&hashTable, 0, peerInfo.username, &peerInfo);
+
+        // Stampa dei dati del PeerInfo
+        printf("PeerInfo: %s\n", entry->d_name);
+        printf("Port: %d\n", peerInfo.port);
+        printf("Data Remota: %s\n", peerInfo.dataRemota);
+        printf("Nome: %s\n", peerInfo.nome);
+        printf("Cognome: %s\n", peerInfo.cognome);
+        printf("Username: %s\n", peerInfo.username);
+        printf("Password: %s\n", peerInfo.password);
+        printf("Balance: %.2f\n", peerInfo.balance);
+        printEvpKey(peerInfo.pubKey);
+        printf("\n");
+
+        // Chiudi i file
+        fclose(infoFile);
+        fclose(publicKeyFile);
+    }
+
+    // Chiudi la cartella parentFolder
+    closedir(dir);
+}
 
 
 
@@ -1204,11 +1347,17 @@ int main() {
     struct sockaddr_in address;
     int addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
+    size_t bufferLength;
     char *response;
     int numBytesRead;
 
+    unsigned char* sign;
+    size_t sign_len;
+
+
+
     /* Buffer di ricezione/appoggio/appoggio */
-    char bufferRicezione[MAXLINE],
+    char *bufferRicezione,
             bufferCopy[MAXLINE],
             bufferNeighbor[MAXLINE];
 
@@ -1256,6 +1405,7 @@ int main() {
 
     initializeHashTable(&hashTable);
     initializePaths();
+    readPeerInfoFromFolders("../client/registered");
 
     //generate_keypair(pathPrivK, pathPubK);
 
@@ -1386,7 +1536,7 @@ int main() {
                         strcpy(peer->dataRemota, "Dati remoti");
 
                         // Inserisci l'elemento nella tabella hash
-                        insert(&hashTable, sd,"Adelmo", peer);
+                        insertEntry(&hashTable, sd,"Adelmo", peer);
 
                         // Invio della risposta al client
                         //send(sd, response, strlen(response), 0);
@@ -1399,10 +1549,8 @@ int main() {
                         break;
                     } else if (atoi(&destination) == 3) {
 
-
-
                         // Recupera l'elemento dalla tabella hash
-                        PeerInfo* retrievedPeer = get(&hashTable, sd);
+                        PeerInfo *retrievedPeer = findEntryByKey(&hashTable, sd);
                         if (retrievedPeer != NULL) {
                             printf("Elemento trovato:\n");
                             printf("Porta: %d\n", retrievedPeer->port);
@@ -1411,8 +1559,95 @@ int main() {
                             printf("Elemento non trovato\n");
                         }
                         break;
-                    } else if (atoi(&destination) == 8) {
+                    } else if (atoi(&destination) == 7) {
 
+                        printf("Sending update balance...");
+                        Entry *e = findEntryByKey(&hashTable, sd);
+
+                        if (e != NULL) {
+                            float balance = e->value->balance;
+
+                            unsigned char str[20];
+
+                            // Utilizza sprintf per convertire il float in una stringa
+                            sprintf(str, "%f", balance);
+
+                            printf("\n\nBALANCE: %s\n\n", balance);
+
+                            printf("Numero convertito in stringa inviato: %s\n", str);
+                            // sending
+
+                            ssend(str, sd);
+                        }
+
+
+
+
+                    } else if (atoi(&destination) == 8) {
+                        printf("DATI UTENTE\n\n");
+                        // Ricevi il messaggio firmato
+                        unsigned char* rec;
+                        size_t rec_l;
+                        unsigned char* rec_s;
+                        size_t rec_s_l;
+
+                        int signatureValid = receive_signed_message(sd, &rec, &rec_l, &rec_s, &rec_s_l);
+
+                        print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
+                        printf("DOPO FIRMA: %d", signatureValid);
+
+                        if (signatureValid) {
+
+                            PeerInfo* retrievedPeer = findEntryByKey(&hashTable, sd);
+
+                            if (retrievedPeer == NULL) {
+                                printf("PEER NULLO");
+                            }
+                            int count = 0;
+
+                            unsigned char decrypted_message[1024];
+                            size_t decrypted_message_len;
+                            printf("The message is correctly signed!\n\n");
+
+                            // Decrypt the message
+                            decrypted_message_len = decrypt_message(rec, rec_l, decrypted_message);
+
+                            // Print the decrypted message
+                            printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
+
+                            // Utilizza strtok per ottenere il primo token
+                            token = strtok(decrypted_message, ":");
+
+                            while (token != NULL) {
+                                if (count > 0) {
+
+                                    // Ignora il primo token
+                                    switch (count) {
+                                        case 1:
+                                            strcpy(retrievedPeer->nome, token);
+                                            break;
+                                        case 2:
+                                            strcpy(retrievedPeer->cognome, token);
+                                            break;
+                                        case 3:
+                                            strcpy(retrievedPeer->username, token);
+                                            break;
+                                        case 4:
+                                            strcpy(retrievedPeer->password, token);
+                                            break;
+                                        case 5:
+                                            retrievedPeer->balance = atof(token);
+                                            break;
+                                    }
+                                }
+
+                                // Passa al token successivo
+                                token = strtok(NULL, ":");
+                                count++;
+                            }
+
+                            insertEntry(&hashTable, sd, retrievedPeer->username, retrievedPeer);
+                        }
 
                     } else if (atoi(&destination) == 9) {
 
@@ -1438,6 +1673,11 @@ int main() {
                             printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
                         }
 
+                        Entry *e = findEntryByUsername(&hashTable, "c");
+                        if (e != NULL) {
+                            printf("e: %s", e->username);
+                        }
+
                         elaborateTransaction(decrypted_message, sd);
 
                         break;
@@ -1453,7 +1693,7 @@ int main() {
                         printEvpKey(serverPublicKey);
 
                         // Recupera l'elemento dalla tabella hash
-                        PeerInfo* retrievedPeer = get(&hashTable, sd);
+                        PeerInfo* retrievedPeer = findEntryByKey(&hashTable, sd);
                         if (retrievedPeer != NULL) {
                             printf("Elemento trovato:\n");
                             printf("Porta: %d\n", retrievedPeer->port);
@@ -1463,6 +1703,7 @@ int main() {
                         } else {
                             printf("Elemento non trovato\n");
                         }
+
                         break;
                     }
                 }
