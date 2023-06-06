@@ -111,6 +111,7 @@ typedef int (*cmd_executor)(char* arg, struct peer_info *peer);
 int numRegister = 0;
 int registered = 0;
 
+struct server_info *server;
 
 /* Verifica di connessione al server */
 int started;
@@ -137,7 +138,7 @@ int registered;
 
 int periodoAnalisi;
 
-EVP_PKEY* serverPublicKey;
+EVP_PKEY* serverPublicKey = NULL;
 
 const unsigned char pathPrivK[1024];
 const unsigned char pathPubK[1024];
@@ -391,7 +392,6 @@ void sendPublicKeyWith4(int socket, EVP_PKEY* publicKey) {
 
 
 void printEvpKey(EVP_PKEY *key) {
-    printf("CISONO\n");
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL) {
         // Error handling
@@ -684,14 +684,14 @@ int verify_signature(const unsigned char* message, size_t message_length, const 
     printf("Signature verification succeeded\n");
 
     // Pulizia delle risorse
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(public_key);
+    //EVP_MD_CTX_free(ctx);
+    //EVP_PKEY_free(public_key);
 
     return 1;
 }
 
 
-int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, const char* public_key_path) {
+int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length) {
     int result;
 
     // Dimensione massima del buffer per il messaggio firmato
@@ -745,13 +745,9 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     memcpy(*message, signed_message + *signature_length, *message_length);
 
     // Verifica la firma del messaggio
-    result = verify_signature(*message, *message_length, *signature, *signature_length, public_key_path);
+    result = verify_signature(*message, *message_length, *signature, *signature_length, server->serverPublicKey);
 
     printf("\nResult: %d", result);
-
-
-    // Libera la memoria
-    free(signed_message);
 
     return result;
 }
@@ -1180,9 +1176,8 @@ size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, u
 
 void updateBalance() {
 
-    // send request to receive updated balance
     // Message to be sent
-    const char* msg = "7";
+    unsigned char* msg = "7";
     size_t msg_len = strlen(msg);
 
     // Buffer to hold the encrypted message
@@ -1190,34 +1185,23 @@ void updateBalance() {
     size_t en_message_len;
 
     // Encrypt the message
-    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+    en_message_len = encrypt_message(msg, msg_len, en_message);
 
     sendMessage(server_sock, en_message, en_message_len);
 
     sleep(2);
-
     // Ricevi il messaggio firmato
     unsigned char* rec;
     size_t rec_l;
     unsigned char* rec_s;
     size_t rec_s_l;
-    unsigned char* decrypted_message;
 
-    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l, serverPublicKey);
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
 
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
 
-    if (signatureValid) {
-
-        printf("The message is correctly signed!\n\n");
-
-        // Decrypt the message
-        int decrypted_message_len = decrypt_message(rec, rec_l, decrypted_message);
-
-        // Print the decrypted message
-        printf("Balance updated: %s\n", decrypted_message);
-    }
+    //free(rec_s);
 
 }
 
@@ -1227,9 +1211,9 @@ void seeBalance() {
 }
 
 int stop_executor(char* arg, struct peer_info *peer) {
-
-    //seeBalance();
-    printAllTransactions(&mySelf->transaction_table);
+    printEvpKey(server->serverPublicKey);
+    updateBalance();
+    //printAllTransactions(&mySelf->transaction_table);
 
 }
 
@@ -1286,12 +1270,9 @@ void send_signed_message(int socket, const unsigned char* message, size_t messag
     }
 
     // Libera la memoria allocata per il messaggio firmato
-    free(signed_message);
+    //free(signed_message);
 }
-#include <stdio.h>
-#include <stdlib.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
+
 
 int sign_message(const unsigned char* message, size_t message_length, const char* private_key_path, unsigned char** signature, size_t* signature_length) {
     // Carica la chiave privata da un file PEM
@@ -1359,8 +1340,8 @@ int sign_message(const unsigned char* message, size_t message_length, const char
     }
 
     // Liberare le risorse
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(private_key);
+    //EVP_MD_CTX_free(ctx);
+    //EVP_PKEY_free(private_key);
 
     return 0;
 }
@@ -1554,15 +1535,15 @@ int start_executor(char* message, struct peer_info *peer) {
 
     send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_length);
 
+    free(signature);
 
     // Ricevi il messaggio firmato
-    unsigned char* rec;
-    size_t rec_l;
-    unsigned char* rec_s;
-    size_t rec_s_l;
-    printf("\n\n\nReceive public key\n\n\n");
-    printEvpKey(serverPublicKey);
-    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l, serverPublicKey);
+    unsigned char* rec = NULL;
+    size_t rec_l = 0;
+    unsigned char* rec_s = NULL;
+    size_t rec_s_l = 0;
+
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
 
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
@@ -1573,6 +1554,9 @@ int start_executor(char* message, struct peer_info *peer) {
         Transaction *t1 = getTransaction(0);
         printDate(t1->timestamp);
     }
+
+    free(rec_s);
+    free(rec);
 
     return 1;
 
@@ -1914,7 +1898,7 @@ void sendPubKey() {
 
 }
 
-void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
+void startEngine(struct peer_info *peer, struct register_info *register_item) {
 
     unsigned char *message;
     char buffer[BUFFER_SIZE] = {0};
@@ -2039,10 +2023,10 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
         printf("Failed to convert received data to public key\n");
         return;
     }
+    // Crea una copia di serverPublicKey1 in serverPublicKey2
+    server->serverPublicKey = EVP_PKEY_dup(serverPublicKey);
 
     printEvpKey(serverPublicKey);
-
-    sleep(5);
 
     get_executor();
 
@@ -2129,7 +2113,6 @@ int main() {
 
     struct peer_info *peer;
     struct register_info *register_item;
-    struct server_info *server;
 
     /* Buffer di ricezione/appoggio/appoggio */
     char bufferRicezione[MAXLINE],
@@ -2139,7 +2122,7 @@ int main() {
     /* Struttura indirizzo server/client */
     struct sockaddr_in my_addr, cl_addr;
 
-    startEngine((struct peer_info *) &peer, (struct register_info *) &register_item, server);
+    startEngine((struct peer_info *) &peer, (struct register_info *) &register_item);
 
     /* Reset dei descrittori */
     FD_ZERO(&master);

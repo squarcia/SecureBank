@@ -723,74 +723,8 @@ void send_signed_message(int socket, const unsigned char* message, size_t messag
     }
 
     // Libera la memoria allocata per il messaggio firmato
-    free(signed_message);
+   // free(signed_message);
 }
-/*
-ssize_t signMessage(const unsigned char* encrypted_message, size_t encrypted_message_len, unsigned char* signature) {
-
-    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
-
-    printPrivateKey(privKey);
-
-    // Calcola l'hash del messaggio cifrato
-    unsigned char message_hash[SHA256_DIGEST_LENGTH];
-    SHA256(encrypted_message, encrypted_message_len, message_hash);
-
-    // Crea un contesto di firma
-    EVP_MD_CTX* sign_ctx = EVP_MD_CTX_new();
-    if (sign_ctx == NULL) {
-        fprintf(stderr, "Errore nella creazione del contesto di firma\n");
-        EVP_PKEY_free(privKey);
-        return 0;
-    }
-
-    // Inizializza l'operazione di firma
-    if (EVP_DigestSignInit(sign_ctx, NULL, EVP_sha256(), NULL, privKey) != 1) {
-        fprintf(stderr, "Errore nell'inizializzazione dell'operazione di firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 0;
-    }
-
-    // Aggiungi l'hash del messaggio cifrato all'operazione di firma
-    if (EVP_DigestSignUpdate(sign_ctx, message_hash, SHA256_DIGEST_LENGTH) != 1) {
-        fprintf(stderr, "Errore nell'aggiunta dell'hash al contesto di firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 0;
-    }
-
-    // Determina la dimensione della firma digitale
-    size_t signature_size;
-    if (EVP_DigestSignFinal(sign_ctx, NULL, &signature_size) != 1) {
-        fprintf(stderr, "Errore nel calcolo della dimensione della firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 0;
-    }
-
-    printf("Sign size: %d", signature_size);
-
-    // Alloca memoria per la firma digitale
-    signature = (unsigned char*)malloc(signature_size);
-    if (signature == NULL) {
-        fprintf(stderr, "Errore nell'allocazione di memoria per la firma\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 0;
-    }
-
-    // Esegui la firma digitale
-    if (EVP_DigestSignFinal(sign_ctx, signature, &signature_size) != 1) {
-        fprintf(stderr, "Errore nella firma digitale\n");
-        EVP_PKEY_free(privKey);
-        EVP_MD_CTX_free(sign_ctx);
-        return 0;
-    }
-
-    return signature_size;
-}
-*/
 
 int sign_message(const unsigned char* message, size_t message_length, const char* private_key_path, unsigned char** signature, size_t* signature_length) {
     // Carica la chiave privata da un file PEM
@@ -858,8 +792,8 @@ int sign_message(const unsigned char* message, size_t message_length, const char
     }
 
     // Liberare le risorse
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(private_key);
+    //EVP_MD_CTX_free(ctx);
+    //EVP_PKEY_free(private_key);
 
     return 0;
 }
@@ -955,50 +889,14 @@ int verify_signature(const unsigned char* message, size_t message_length, const 
     printf("Signature verification succeeded\n");
 
     // Pulizia delle risorse
-    EVP_MD_CTX_free(ctx);
-    EVP_PKEY_free(public_key);
+    //EVP_MD_CTX_free(ctx);
+    //EVP_PKEY_free(public_key);
 
     return 1;
 }
 
-/*
-int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length, EVP_PKEY* public_key) {
-    // Calcola l'hash del messaggio originale
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256(message, message_length, hash);
 
-    // Crea un contesto di verifica della firma
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (ctx == NULL) {
-        perror("Failed to create signature verification context");
-        return 0;
-    }
-
-    // Inizializza il contesto di verifica della firma con la chiave pubblica
-    if (EVP_VerifyInit(ctx, EVP_sha256()) != 1) {
-        perror("Failed to initialize signature verification context");
-        EVP_MD_CTX_free(ctx);
-        return 0;
-    }
-
-    // Aggiungi l'hash del messaggio al contesto di verifica della firma
-    if (EVP_VerifyUpdate(ctx, hash, SHA256_DIGEST_LENGTH) != 1) {
-        perror("Failed to update signature verification context");
-        EVP_MD_CTX_free(ctx);
-        return 0;
-    }
-    printEvpKey(public_key);
-    // Verifica la firma utilizzando la chiave pubblica
-    int result = EVP_VerifyFinal(ctx, signature, signature_length, public_key);
-
-    // Pulisci il contesto di verifica della firma
-    EVP_MD_CTX_free(ctx);
-
-    return result;
-}
-*/
-
-int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, const char* public_key_path) {
+int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, EVP_PKEY* public_key) {
     int result;
 
     // Dimensione massima del buffer per il messaggio firmato
@@ -1052,13 +950,14 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     memcpy(*message, signed_message + *signature_length, *message_length);
 
     // Verifica la firma del messaggio
-    result = verify_signature(*message, *message_length, *signature, *signature_length, public_key_path);
+    result = verify_signature(*message, *message_length, *signature, *signature_length, public_key);
 
     printf("\nResult: %d", result);
 
 
     // Libera la memoria
-    free(signed_message);
+
+    //free(signed_message);
 
     return result;
 }
@@ -1152,30 +1051,18 @@ int ssend(char* message, int socket) {
     send_signed_message(socket, encrypted_message, encrypted_message_len, signature, signature_size);
 }
 */
-void elaborateTransaction(unsigned char *message, int sd) {
-
-    char* delimiter = " ";
-
-    char* token1 = NULL;
-    char* token2 = NULL;
-
-    float amount = 0;
-
-    // Primo token
-    token1 = strtok(message, delimiter);
-    token2 = strtok(NULL, delimiter);
+void elaborateTransaction(unsigned char *username, float amount, int sd) {
 
     // check user exists
-    Entry* dest = findEntryByUsername(peerList, token1);
+    Entry* dest = findEntryByUsername(peerList, username);
     Entry* mitt = findEntryByKey(peerList, sd);
 
     if (dest != NULL) {
-        printf("Entry trovata per l'username '%s':\n", token1);
+        printf("Entry trovata per l'username '%s':\n", username);
         printf("Key: %d\n", dest->value->socket);
         printf("Username: %s\n", dest->value->username);
         printf("Balance: %f\n", dest->value->balance);
         // Modifica il campo port di PeerInfo
-        amount = atof(token2);
         printf("Amount %f\n", amount);
 
         dest->value->balance += amount;
@@ -1695,16 +1582,44 @@ int main() {
 
                             unsigned char str[20];
 
-                            // Utilizza sprintf per convertire il float in una stringa
-                            sprintf(str, "%f", balance);
+                            printf("Balance of %d, %f€", sd, foundEntryByUsername->value->balance);
 
-                            printf("\n\nBALANCE: %s\n\n", balance);
+                            // Utilizza sprintf per convertire il float in una stringa
+                            sprintf(str, "%f", foundEntryByUsername->value->balance);
+
+                            printf("\n\nBALANCE: %s\n\n", str);
 
                             printf("Numero convertito in stringa inviato: %s\n", str);
                             // sending
 
+                            // Message to be sent
+                            size_t message_len = strlen(str);
+
+                            // Buffer to hold the encrypted message
+                            unsigned char encrypted_message[1024];
+                            size_t encrypted_message_len;
+
+                            // Encrypt the message
+                            encrypted_message_len = encrypt_message((const unsigned char*)str, message_len, encrypted_message);
+
+                            // Variabili per la firma
+                            unsigned char* signature = NULL;
+                            size_t signature_length = 0;
+
+                            // Firma il messaggio
+                            int result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
+                            if (result != 0) {
+                                fprintf(stderr, "Failed to sign the message\n");
+                                return 1;
+                            }
+                            print_hex(signature, signature_length, "FIRMA");
+
+                            send_signed_message(sd, encrypted_message, encrypted_message_len, signature, signature_length);
+
+
                             //ssend(str, sd);
                         }
+
 
                     } else if (atoi(&destination) == 8) {
                         printf("DATI UTENTE\n\n");
@@ -1779,22 +1694,23 @@ int main() {
                     } else if (atoi(&destination) == 9) {
 
                         printf("MESSAGGIO FIRMATO\n");
-                        // Ricevi il messaggio firmato
+// Ricevi il messaggio firmato
                         unsigned char* rec_msg;
                         size_t received_msg_length;
+
                         unsigned char* received_signature;
                         size_t received_signature_length;
+
                         unsigned char decr_message[1024];
                         size_t decrypted_message_len;
 
-                        Entry *e = findEntryByKey(peerList, sd);
+                        Entry* e = findEntryByKey(peerList, sd);
 
-                        printEvpKey(e->value->pubKey);
+                        printEvpKey((EVP_PKEY*)e->value->pubKey);
 
                         int signatureValid = receive_signed_message(sd, &rec_msg, &received_msg_length, &received_signature, &received_signature_length, e->value->pubKey);
 
                         if (signatureValid) {
-
                             printf("The message is correctly signed!\n\n");
 
                             // Decrypt the message
@@ -1802,9 +1718,32 @@ int main() {
 
                             // Print the decrypted message
                             printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decr_message);
+                            printf("Decrypted Message Len: %d\n", (int)decrypted_message_len);
                         }
 
-                        elaborateTransaction(decr_message, sd);
+                        free(rec_msg);
+                        free(received_signature);
+
+                        char bufferCopy[1024];
+                        memcpy(bufferCopy, decr_message, decrypted_message_len);
+
+                        char* delimiter = " ";
+
+                        char* username = NULL;
+                        char* stringAmount = NULL;
+
+                        float amount = 0;
+
+                        // Primo token
+                        username = strtok(bufferCopy, delimiter);
+                        stringAmount = strtok(NULL, delimiter);
+
+                        printf("Username %s, Amount%s\n", username, stringAmount);
+
+                        amount = atof(stringAmount);
+
+                        elaborateTransaction(username, amount, sd);
+
 
                         break;
                     }else if (atoi(&destination) == 6){
