@@ -181,6 +181,7 @@ void getHour(char *buffer) {
     sprintf(buffer, "%02d\n", tm.tm_hour);
 }
 
+
 void inserisciRegistro(struct register_info *item, struct peer_info *peer) {
 
     struct register_info *current_node = peer->register_list;
@@ -241,6 +242,22 @@ void printDate(time_t currentTime) {
 
     // Stampa la data formattata
     printf("Data e ora correnti: %s\n", formattedTime);
+}
+
+
+void printAllTransactions(const TransactionTable * object) {
+    printf("Transazioni dell'oggetto:\n");
+
+    for (int i = 0; i < object->transaction_count; i++) {
+        const Transaction* transaction = &(object->transactions[i]);
+
+        printf("Transazione %d:\n", i+1);
+        printf("ID: %s\n", transaction->account_number);
+        printf("Amount: %f€\n", transaction->amount);
+        printDate(transaction->timestamp);
+
+        printf("\n");
+    }
 }
 
 Transaction createTransaction(int trans_id, const char* account_num, float amount) {
@@ -533,7 +550,7 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
 
     return keypair;
 }
-
+/*
 int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length) {
     // Calcola l'hash del messaggio originale
     unsigned char hash[SHA256_DIGEST_LENGTH];
@@ -570,7 +587,8 @@ int verify_signature(const unsigned char* message, size_t message_length, const 
 
     return result;
 }
-
+ */
+/*
 int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length) {
 
     int result;
@@ -631,7 +649,112 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
 
     return result;
 }
+*/
 
+
+// Funzione per verificare la firma di un messaggio
+int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length,  EVP_PKEY* public_key) {
+
+    // Crea il contesto per la verifica della firma
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("Failed to create EVP_MD_CTX");
+        EVP_PKEY_free(public_key);
+        return -1;
+    }
+
+    // Inizializza il contesto con la chiave pubblica
+    int result = EVP_DigestVerifyInit(ctx, NULL, EVP_sha256(), NULL, public_key);
+    if (result != 1) {
+        perror("Failed to initialize EVP_DigestVerifyInit");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(public_key);
+        return -1;
+    }
+
+    // Verifica la firma del messaggio
+    result = EVP_DigestVerify(ctx, signature, signature_length, message, message_length);
+    if (result != 1) {
+        printf("Signature verification failed\n");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(public_key);
+        return -1;
+    }
+
+    printf("Signature verification succeeded\n");
+
+    // Pulizia delle risorse
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(public_key);
+
+    return 1;
+}
+
+
+int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, const char* public_key_path) {
+    int result;
+
+    // Dimensione massima del buffer per il messaggio firmato
+    size_t max_length = BUFFER_SIZE + 256;
+
+    // Alloca un buffer per il messaggio firmato
+    unsigned char* signed_message = (unsigned char*)malloc(max_length);
+    if (signed_message == NULL) {
+        perror("Failed to allocate memory for signed message");
+        return -1;
+    }
+
+    // Ricevi il messaggio firmato dal socket
+    ssize_t bytes_received = recv(socket, signed_message, max_length, 0);
+    if (bytes_received < 0) {
+        perror("Failed to receive signed message");
+        free(signed_message);
+        return -1;
+    }
+
+    // Assegna la lunghezza totale del messaggio firmato
+    size_t total_length = (size_t)bytes_received;
+
+    // Assegna la lunghezza della firma (supponendo che sia fissa)
+    *signature_length = 256;
+
+    // Assegna la lunghezza del messaggio
+    *message_length = total_length - *signature_length;
+
+    // Alloca il buffer per la firma
+    *signature = (unsigned char*)malloc(*signature_length);
+    if (*signature == NULL) {
+        perror("Failed to allocate memory for signature");
+        free(signed_message);
+        return -1;
+    }
+
+    // Alloca il buffer per il messaggio
+    *message = (unsigned char*)malloc(*message_length);
+    if (*message == NULL) {
+        perror("Failed to allocate memory for message");
+        free(*signature);
+        free(signed_message);
+        return -1;
+    }
+
+    // Copia la firma dal messaggio firmato
+    memcpy(*signature, signed_message, *signature_length);
+
+    // Copia il messaggio dal messaggio firmato
+    memcpy(*message, signed_message + *signature_length, *message_length);
+
+    // Verifica la firma del messaggio
+    result = verify_signature(*message, *message_length, *signature, *signature_length, public_key_path);
+
+    printf("\nResult: %d", result);
+
+
+    // Libera la memoria
+    free(signed_message);
+
+    return result;
+}
 
 
 int register_executor() {
@@ -1080,7 +1203,7 @@ void updateBalance() {
     size_t rec_s_l;
     unsigned char* decrypted_message;
 
-    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l, serverPublicKey);
 
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
@@ -1105,7 +1228,8 @@ void seeBalance() {
 
 int stop_executor(char* arg, struct peer_info *peer) {
 
-    seeBalance();
+    //seeBalance();
+    printAllTransactions(&mySelf->transaction_table);
 
 }
 
@@ -1164,12 +1288,94 @@ void send_signed_message(int socket, const unsigned char* message, size_t messag
     // Libera la memoria allocata per il messaggio firmato
     free(signed_message);
 }
+#include <stdio.h>
+#include <stdlib.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 
+int sign_message(const unsigned char* message, size_t message_length, const char* private_key_path, unsigned char** signature, size_t* signature_length) {
+    // Carica la chiave privata da un file PEM
+    FILE* private_key_file = fopen(private_key_path, "rb");
+    if (private_key_file == NULL) {
+        perror("Failed to open private key file");
+        return -1;
+    }
+
+    EVP_PKEY* private_key = PEM_read_PrivateKey(private_key_file, NULL, NULL, NULL);
+    fclose(private_key_file);
+    if (private_key == NULL) {
+        perror("Failed to read private key");
+        return -1;
+    }
+
+    // Crea il contesto per la firma
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        perror("Failed to create signature context");
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Inizializza il contesto per la firma con la chiave privata
+    if (EVP_DigestSignInit(ctx, NULL, EVP_sha256(), NULL, private_key) != 1) {
+        perror("Failed to initialize signature");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Firma il messaggio
+    if (EVP_DigestSignUpdate(ctx, message, message_length) != 1) {
+        perror("Failed to update signature");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Ottieni la dimensione della firma
+    if (EVP_DigestSignFinal(ctx, NULL, signature_length) != 1) {
+        perror("Failed to get signature length");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Alloca il buffer per la firma
+    *signature = (unsigned char*)malloc(*signature_length);
+    if (*signature == NULL) {
+        perror("Failed to allocate memory for signature");
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Esegui la firma effettiva
+    if (EVP_DigestSignFinal(ctx, *signature, signature_length) != 1) {
+        perror("Failed to sign message");
+        free(*signature);
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(private_key);
+        return -1;
+    }
+
+    // Liberare le risorse
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(private_key);
+
+    return 0;
+}
+
+
+
+/*
 ssize_t signMessage(const unsigned char* encrypted_message, size_t encrypted_message_len, unsigned char* signature) {
 
     EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
 
+    printPrivateKey(privKey);
+
     // Calcola l'hash del messaggio cifrato
+
     unsigned char message_hash[SHA256_DIGEST_LENGTH];
     SHA256(encrypted_message, encrypted_message_len, message_hash);
 
@@ -1226,7 +1432,7 @@ ssize_t signMessage(const unsigned char* encrypted_message, size_t encrypted_mes
 
     return signature_size;
 }
-
+*/
 int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction) {
 
     unsigned char decrypted_message[1024];
@@ -1309,7 +1515,20 @@ void sendPublicKey(int socket, EVP_PKEY* publicKey) {
 // Funzione per inviare soldi a un'altra persona
 int start_executor(char* message, struct peer_info *peer) {
 
-    EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+    // Message to be sent
+    unsigned char* msg = "9";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message(msg, msg_len, en_message);
+
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(2);
 
     // Message to be sent
     size_t message_len = strlen(message);
@@ -1321,43 +1540,36 @@ int start_executor(char* message, struct peer_info *peer) {
     // Encrypt the message
     encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
 
-    unsigned char* signature;
-    size_t signature_size;
-    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
+    // Variabili per la firma
+    unsigned char* signature = NULL;
+    size_t signature_length = 0;
 
-    // Message to be sent
-    const char* msg = "9";
-    size_t msg_len = strlen(msg);
+    // Firma il messaggio
+    int result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
+    if (result != 0) {
+        fprintf(stderr, "Failed to sign the message\n");
+        return 1;
+    }
+    print_hex(signature, signature_length, "FIRMA");
 
-    // Buffer to hold the encrypted message
-    unsigned char en_message[1024];
-    size_t en_message_len;
+    send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_length);
 
-    // Encrypt the message
-    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
-
-    sendMessage(server_sock, en_message, en_message_len);
-
-    sleep(2);
-
-    // Invia il messaggio firmato
-    send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_size);
-    sleep(2);
 
     // Ricevi il messaggio firmato
     unsigned char* rec;
     size_t rec_l;
     unsigned char* rec_s;
     size_t rec_s_l;
-
-    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
+    printf("\n\n\nReceive public key\n\n\n");
+    printEvpKey(serverPublicKey);
+    int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l, serverPublicKey);
 
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
 
-    int result = saveTransaction(rec, rec_l, message);
+    int r = saveTransaction(rec, rec_l, message);
 
-    if (result == 1) {
+    if (r == 1) {
         Transaction *t1 = getTransaction(0);
         printDate(t1->timestamp);
     }
@@ -1404,7 +1616,7 @@ int ssend(char* message, int socket) {
 
     unsigned char *signature = BIO_f_null;
     size_t signature_size;
-    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
+    //signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
     print_hex(signature, signature_size, "SIGNATURE");
     // Invia il messaggio firmato
     send_signed_message(socket, encrypted_message, encrypted_message_len, signature, signature_size);
@@ -1413,6 +1625,21 @@ int ssend(char* message, int socket) {
 int add_executor() {
 
     EVP_PKEY *privKey = readPrivateKeyFromPEM(pathPrivK);
+
+    // Message to be sent
+    const char* msg = "8";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(5);
 
     // Calcola la lunghezza totale della stringa da inviare
     int stringLength = snprintf(NULL, 0, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome,
@@ -1435,26 +1662,10 @@ int add_executor() {
 
     unsigned char* signature;
     size_t signature_size;
-    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
-
-    // Message to be sent
-    const char* msg = "8";
-    size_t msg_len = strlen(msg);
-
-    // Buffer to hold the encrypted message
-    unsigned char en_message[1024];
-    size_t en_message_len;
-
-    // Encrypt the message
-    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
-
-    sendMessage(server_sock, en_message, en_message_len);
-
-    sleep(2);
+    //signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
 
     // Invia il messaggio firmato
     send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_size);
-    sleep(2);
 }
 
 int login_executor(char* arg, struct peer_info *peer) {
@@ -1673,6 +1884,20 @@ void sendEncryptedPublicKey(int socket, EVP_PKEY* publicKey) {
 
 void sendPubKey() {
     // Invio la mia public key al server cifrata
+    // Message to be sent
+    const char* msg = "6";
+    size_t msg_len = strlen(msg);
+
+    // Buffer to hold the encrypted message
+    unsigned char en_message[1024];
+    size_t en_message_len;
+
+    // Encrypt the message
+    en_message_len = encrypt_message((const unsigned char*)msg, msg_len, en_message);
+
+    sendMessage(server_sock, en_message, en_message_len);
+
+    sleep(5);
 
     EVP_PKEY *pubKey = readPublicKeyFromPEM(pathPubK);
 
@@ -1686,11 +1911,12 @@ void sendPubKey() {
 
     sendEncryptedPublicKey(server_sock, pubKey);
     printf("Public key sent!\n %s", pubkey_data);
+
 }
 
 void startEngine(struct peer_info *peer, struct register_info *register_item, struct server_info *server) {
 
-    char *message = "1[ PEER CONNESSO CORRETTAMENTE ]";
+    unsigned char *message;
     char buffer[BUFFER_SIZE] = {0};
     int valread;
     struct sockaddr_in serv_addr;
@@ -1744,27 +1970,6 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     /* Verify the identity of the server */
     verifySelfSignedCertificate("../server/certificate.pem");
 
-    // Invio del messaggio al server
-    send(server->server_sock, message, strlen(message), 0);
-
-    /* Ricezione della chiave pubblica */
-    // Ricevi i dati della chiave pubblica dal server tramite il socket
-    unsigned char receivedBuffer[BUFFER_SIZE];  // Definisci la dimensione massima del buffer
-    int receivedSize = recv(server->server_sock, receivedBuffer, sizeof(receivedBuffer), 0);
-    //int receivedSize = read(server_sock, receivedBuffer, BUFFER_SIZE);
-    if (receivedSize <= 0) {
-        perror("Failed to receive public key");
-        return;
-    }
-
-    // Converti i dati ricevuti nella chiave pubblica del server
-    serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
-    if (serverPublicKey == NULL) {
-        printf("Failed to convert received data to public key\n");
-        return;
-    }
-
-    printEvpKey(serverPublicKey);
 
     // Verifico che il peer sia registrato
     char answer;
@@ -1805,6 +2010,39 @@ void startEngine(struct peer_info *peer, struct register_info *register_item, st
     } else {
         printf("Risposta non valida.\n");
     }
+
+    // Calcola la lunghezza totale della stringa da inviare
+    int stringLength = snprintf(NULL, 0, "1:%s", mySelf->nome);
+
+    // Alloca memoria per la stringa risultante
+    message = malloc((stringLength + 1) * sizeof(char));
+
+    // Costruisci la stringa formattata
+    sprintf(message, "1:%s", mySelf->nome);
+
+    // Invio del messaggio al server
+    send(server->server_sock, message, stringLength, 0);
+
+    /* Ricezione della chiave pubblica */
+    // Ricevi i dati della chiave pubblica dal server tramite il socket
+    unsigned char receivedBuffer[BUFFER_SIZE];  // Definisci la dimensione massima del buffer
+    int receivedSize = recv(server->server_sock, receivedBuffer, sizeof(receivedBuffer), 0);
+    //int receivedSize = read(server_sock, receivedBuffer, BUFFER_SIZE);
+    if (receivedSize <= 0) {
+        perror("Failed to receive public key");
+        return;
+    }
+
+    // Converti i dati ricevuti nella chiave pubblica del server
+    serverPublicKey = convertToPublicKey(receivedBuffer, receivedSize);
+    if (serverPublicKey == NULL) {
+        printf("Failed to convert received data to public key\n");
+        return;
+    }
+
+    printEvpKey(serverPublicKey);
+
+    sleep(5);
 
     get_executor();
 
@@ -1926,20 +2164,6 @@ int main() {
 
                 if (i == STDIN_FILENO) {
                     _handle_cmd(peer);
-                } else {
-                    printf("\n\n\n\n\t\t\t\t   [  RICEZIONE IN CORSO...  ]\n\n");
-                    read(i, bufferRicezione, BUFFER_SIZE);
-
-                    if (crypted == 1) {
-
-                        unsigned char iv[KEY_LENGTH] = {0};
-                        unsigned char plaintext[BUFFER_SIZE];
-                        // decryptMessage(bufferRicezione, strlen(bufferRicezione), shared_secret, iv, plaintext);
-                        printf("Plaintext arrived: %s, Dimension: %d", plaintext, strlen(plaintext));
-                        strcpy(bufferNeighbor, plaintext);
-                    } else {
-                        strcpy(bufferNeighbor, bufferRicezione);
-                    }
                 }
             }
         }
