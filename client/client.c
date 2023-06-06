@@ -1201,6 +1201,20 @@ void updateBalance() {
     print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
     printf("DOPO FIRMA: %d", signatureValid);
 
+    if (signatureValid) {
+
+        unsigned char decr_message[1024];
+        size_t decrypted_message_len;
+        printf("The message is correctly signed!\n\n");
+
+        // Decrypt the message
+        decrypted_message_len = decrypt_message(rec, rec_l, decr_message);
+
+        // Print the decrypted message
+        printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decr_message);
+        printf("Decrypted Message Len: %d\n", (int)decrypted_message_len);
+    }
+
     //free(rec_s);
 
 }
