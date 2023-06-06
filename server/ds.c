@@ -14,20 +14,17 @@
 #include <dirent.h>
 
 #define PORT	    8080
-#define MAXLINE     1024
 #define MAX_KEY_SIZE 2048
 #define MAX_CLIENTS 5
 #define BUFFER_SIZE 1024
 #define HMAC_SIZE 32
 #define NONCE_SIZE 16
-#define TABLE_SIZE 100
 
 #define COMMANDS 5
 #define COMMAND_PREFIX '!'
 
 
 typedef int (*cmd_executor)(char* arg);
-
 
 int crypted = 0;
 
@@ -961,96 +958,7 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
 
     return result;
 }
-/*
-int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length) {
 
-    int result;
-
-    // Dimensione massima del buffer per il messaggio firmato
-    size_t max_length = BUFFER_SIZE + 256;
-
-    // Alloca un buffer per il messaggio firmato
-    unsigned char* signed_message = (unsigned char*)malloc(max_length);
-    if (signed_message == NULL) {
-        perror("Failed to allocate memory for signed message");
-        return -1;
-    }
-
-    // Ricevi il messaggio firmato dal socket
-    ssize_t bytes_received = recv(socket, signed_message, max_length, 0);
-    if (bytes_received < 0) {
-        perror("Failed to receive signed message");
-        free(signed_message);
-        return -1;
-    }
-
-    // Assegna la lunghezza totale del messaggio firmato
-    size_t total_length = (size_t)bytes_received;
-
-    // Assegna la lunghezza della firma (supponendo che sia fissa)
-    *signature_length = 256;
-
-    // Assegna la lunghezza del messaggio
-    *message_length = total_length - *signature_length;
-
-    // Alloca il buffer per la firma
-    *signature = (unsigned char*)malloc(*signature_length);
-    if (*signature == NULL) {
-        perror("Failed to allocate memory for signature");
-        free(signed_message);
-        return -1;
-    }
-
-    // Alloca il buffer per il messaggio
-    *message = (unsigned char*)malloc(*message_length);
-    if (*message == NULL) {
-        perror("Failed to allocate memory for message");
-        free(*signature);
-        free(signed_message);
-        return -1;
-    }
-
-    // Copia la firma dal messaggio firmato
-    memcpy(*signature, signed_message, *signature_length);
-
-    // Copia il messaggio dal messaggio firmato
-    memcpy(*message, signed_message + *signature_length, *message_length);
-
-    Entry* retrievedPeer = findEntryByKey(peerList, socket);
-    printf("PEER %d", socket);
-    //printf("Pubkey: %d", retrievedPeer->value->pubKey);
-    // printf("Message: %s\n Firma: %s\n", *message, *signature);
-    printEvpKey((EVP_PKEY *) retrievedPeer->value->pubKey);
-    result = verify_signature(*message, *message_length, *signature, *signature_length, (EVP_PKEY *)retrievedPeer->value->pubKey);
-    return result;
-}
-*/
-
-/*
-// Funzione per inviare soldi a un'altra persona
-int ssend(char* message, int socket) {
-
-    // Message to be sent
-    size_t message_len = strlen(message);
-
-    // Buffer to hold the encrypted message
-    unsigned char encrypted_message[1024];
-    size_t encrypted_message_len;
-
-    // Encrypt the message
-    encrypted_message_len = encrypt_message((const unsigned char*)message, message_len, encrypted_message);
-
-    print_hex(encrypted_message, encrypted_message_len, "ENCRYPTED MESSAGE");
-    sleep(2);
-
-    unsigned char *signature = BIO_f_null;
-    size_t signature_size;
-    signature_size = signMessage(encrypted_message, encrypted_message_len, signature);
-    print_hex(signature, signature_size, "SIGNATURE");
-    // Invia il messaggio firmato
-    send_signed_message(socket, encrypted_message, encrypted_message_len, signature, signature_size);
-}
-*/
 void elaborateTransaction(unsigned char *username, float amount, int sd) {
 
     // check user exists
@@ -1097,16 +1005,33 @@ void elaborateTransaction(unsigned char *username, float amount, int sd) {
 
         send_signed_message(sd, encrypted_message, encrypted_message_len, signature, signature_length);
 
-
-
-
-
-
-
     } else {
         printf("Utente non esistente, riprovare");
         // invia messaggio negativo
-        //ssend("NOPE Non Va bene", sd);
+        unsigned char *response = "NOPE Non Va bene";
+        // Message to be sent
+        size_t response_len = strlen(response);
+
+        // Buffer to hold the encrypted message
+        unsigned char encrypted_message[1024];
+        size_t encrypted_message_len;
+
+        // Encrypt the message
+        encrypted_message_len = encrypt_message((const unsigned char*)response, response_len, encrypted_message);
+
+        // Variabili per la firma
+        unsigned char* signature = NULL;
+        size_t signature_length = 0;
+
+        // Firma il messaggio
+        int result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
+        if (result != 0) {
+            fprintf(stderr, "Failed to sign the message\n");
+            return;
+        }
+        print_hex(signature, signature_length, "FIRMA");
+
+        send_signed_message(sd, encrypted_message, encrypted_message_len, signature, signature_length);
     }
 }
 
@@ -1279,88 +1204,6 @@ void readPeerInfoFromFolders(const char* parentFolder) {
     // Chiudi la cartella parentFolder
     closedir(dir);
 }
-/*
-
-void readFilesWithSameName(const char* folderPath) {
-    DIR* dir = opendir(folderPath);
-    if (dir == NULL) {
-        printf("Failed to open directory: %s\n", folderPath);
-        return;
-    }
-
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_DIR) {  // Check if it's a directory
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;  // Skip current directory and parent directory
-            }
-
-            char subFolderPath[1024];
-            snprintf(subFolderPath, sizeof(subFolderPath), "%s/%s", folderPath, entry->d_name);
-
-            DIR* subDir = opendir(subFolderPath);
-            if (subDir == NULL) {
-                printf("Failed to open directory: %s\n", subFolderPath);
-                continue;
-            }
-
-            struct dirent* subEntry;
-            while ((subEntry = readdir(subDir)) != NULL) {
-                if (subEntry->d_type == DT_REG) {  // Check if it's a regular file
-                    if (strcmp(subEntry->d_name, entry->d_name) == 0) {
-                        char filePath[1024];
-                        snprintf(filePath, sizeof(filePath), "%s/%s", subFolderPath, subEntry->d_name);
-
-                        FILE* file = fopen(filePath, "r");
-                        if (file == NULL) {
-                            printf("Failed to open file: %s\n", filePath);
-                            continue;
-                        }
-
-                        EVP_PKEY *pubKey = readPublicKeyFromPEM(publicKeyFilePath);
-
-                        FILE* infoFile = fopen(infoFilePath, "r");
-                        FILE* publicKeyFile = fopen(publicKeyFilePath, "r");
-
-                        if (infoFile == NULL || publicKeyFile == NULL) {
-                            // Errore nell'apertura di uno dei file, passa alla prossima sotto-cartella
-                            perror("Failed to open file");
-                            if (infoFile != NULL) fclose(infoFile);
-                            if (publicKeyFile != NULL) fclose(publicKeyFile);
-                            continue;
-                        }
-
-                        // Lettura dei dati dai file e inizializzazione del PeerInfo
-                        PeerInfo* peerInfo = (PeerInfo*)malloc(sizeof(PeerInfo));
-
-                        peerInfo->pubKey = pubKey;
-
-                        float balance = 0;
-
-                        if (fscanf(infoFile, "%[^:]:%[^:]:%[^:]:%[^:]:%f",
-                                   peerInfo->nome, peerInfo->cognome, peerInfo->username,
-                                   peerInfo->password, &balance) != 5) {
-                            // Errore nella lettura dei dati, passa alla prossima sottocartella
-                            perror("Failed to read data from file");
-                            fclose(infoFile);
-                            fclose(publicKeyFile);
-                            continue;
-                        }
-
-                        peerInfo->balance = balance;
-
-                        fclose(file);
-                    }
-                }
-            }
-
-            closedir(subDir);
-        }
-    }
-
-    closedir(dir);
-}
-*/
 
 int main() {
     int master_socket, new_socket, client_sockets[MAX_CLIENTS];
@@ -1635,7 +1478,7 @@ int main() {
 
                         print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
                         printf("DOPO FIRMA: %d", signatureValid);
-
+                        /*
                         if (signatureValid) {
 
                             Entry* foundEntryByUsername = findEntryByKey(peerList, sd);
@@ -1690,11 +1533,11 @@ int main() {
 
                             insertEntry(peerList, &foundEntryByUsername);
                         }
-
+                        */
                     } else if (atoi(&destination) == 9) {
 
                         printf("MESSAGGIO FIRMATO\n");
-// Ricevi il messaggio firmato
+                        // Ricevi il messaggio firmato
                         unsigned char* rec_msg;
                         size_t received_msg_length;
 
@@ -1738,9 +1581,11 @@ int main() {
                         username = strtok(bufferCopy, delimiter);
                         stringAmount = strtok(NULL, delimiter);
 
-                        printf("Username %s, Amount%s\n", username, stringAmount);
+                        printf("Username %s, Amount %s\n", username, stringAmount);
 
                         amount = atof(stringAmount);
+
+                        printf("Amount After %f\n", amount);
 
                         elaborateTransaction(username, amount, sd);
 
