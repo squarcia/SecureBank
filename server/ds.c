@@ -980,7 +980,7 @@ void elaborateTransaction(unsigned char *username, float amount, int sd) {
         printf("Mitt Balance after: %f\n", mitt->value->balance);
 
         // invia messaggio positivo
-        unsigned char *response = "OK Va bene";
+        unsigned char *response = "OK";
         // Message to be sent
         size_t response_len = strlen(response);
 
@@ -1116,6 +1116,85 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
     return keypair;
 }
 
+unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore) {
+
+    const unsigned char key[] = "0123456789012345";
+    // Apri il file cifrato
+    FILE* cipher_file = fopen(ciphertext_file, "rb");
+    if (!cipher_file) {
+        fprintf(stderr, "Errore: impossibile aprire il file '%s' (il file non esiste?)\n", ciphertext_file);
+        exit(1);
+    }
+
+    // Leggi IV dal file cifrato
+    unsigned char iv[EVP_MAX_IV_LENGTH];
+    int iv_len = EVP_CIPHER_iv_length(EVP_aes_128_cbc());
+    fread(iv, 1, iv_len, cipher_file);
+
+    // Crea e inizializza il contesto di decrittografia
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
+        exit(1);
+    }
+
+    // Inizializza l'operazione di decrittografia
+    int ret = EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: DecryptInit Failed\n");
+        exit(1);
+    }
+
+    // Buffer per i dati di input e output
+    unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
+    unsigned char out_buf[1024];
+
+    int num_bytes_read, num_bytes_written;
+
+    // Ciclo di decrittografia
+    while ((num_bytes_read = fread(in_buf, 1, sizeof(in_buf), cipher_file)) > 0) {
+        ret = EVP_DecryptUpdate(ctx, out_buf, &num_bytes_written, in_buf, num_bytes_read);
+        if (ret != 1) {
+            fprintf(stderr, "Errore: DecryptUpdate Failed\n");
+            exit(1);
+        }
+
+        fwrite(out_buf, 1, num_bytes_written, stdout);
+    }
+
+    // Finalizza l'operazione di decrittografia
+    ret = EVP_DecryptFinal_ex(ctx, out_buf, &num_bytes_written);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: DecryptFinal Failed\n");
+        exit(1);
+    }
+
+    fwrite(out_buf, 1, num_bytes_written, stdout);
+
+    // Dealloca il contesto di decrittografia
+    EVP_CIPHER_CTX_free(ctx);
+
+    // Chiudi il file
+    fclose(cipher_file);
+
+    return out_buf;
+}
+
+void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
+    FILE* file = fopen(keyPath, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Impossibile aprire il file per la lettura\n");
+        exit(1);
+    }
+
+    size_t bytesRead = fread(keyStore, 1, 256, file);
+
+    fclose(file);
+
+
+}
+
+
 void readPeerInfoFromFolders(const char* parentFolder) {
     // Apertura del parentFolder
     DIR* dir = opendir(parentFolder);
@@ -1139,48 +1218,56 @@ void readPeerInfoFromFolders(const char* parentFolder) {
         // Lettura dei file all'interno della sottocartella
         char infoFilePath[1024];
         char publicKeyFilePath[1024];
+        unsigned char *pathKey[1024];
 
-        snprintf(infoFilePath, sizeof(infoFilePath), "%s/%s", subFolderPath, entry->d_name);
+        snprintf(infoFilePath, sizeof(infoFilePath), "%s/info.txt", subFolderPath);
         snprintf(publicKeyFilePath, sizeof(publicKeyFilePath), "%s/public_key", subFolderPath);
+        snprintf(pathKey, sizeof(pathKey), "%s/key.txt", subFolderPath);
 
-        printf("Info file path: %s", infoFilePath);
+        printf("\nInfo file path: %s", infoFilePath);
+        printf("\nKey file path: %s", pathKey);
 
         EVP_PKEY *pubKey = readPublicKeyFromPEM(publicKeyFilePath);
 
-        FILE* infoFile = fopen(infoFilePath, "r");
+        // Carica info utente
+        // Lettura dei dati dai file e inizializzazione del PeerInfo
+        unsigned char keyStore[1024];
+        loadSharedSecretFromFile(keyStore, pathKey);
+        unsigned char *informationsUser;
+        informationsUser = decryptFile(infoFilePath, keyStore);
+        if (informationsUser == NULL) {
+            fprintf(stderr, "Errore: Impossibile decrittare le informazioni dell'utente\n");
+            exit(1);
+        }
+
+        // Allocazione della variabile PeerInfo
+        PeerInfo* peerInfo = malloc(sizeof(PeerInfo));
+        if (peerInfo == NULL) {
+            fprintf(stderr, "Errore: Impossibile allocare memoria per PeerInfo\n");
+            exit(1);
+        }
+
+        int balance = 0;
+
+        if (sscanf((char*)informationsUser, "%[^:]:%[^:]:%[^:]:%[^:]:%f",
+                   peerInfo->nome, peerInfo->cognome, peerInfo->username,
+                   peerInfo->password, &balance) != 5) {
+            // Errore nella lettura dei dati, gestisci l'errore adeguatamente
+            perror("Failed to read data from decrypted information");
+        }
+
+        printf("\nUsername: %s", peerInfo->username);
+
         FILE* publicKeyFile = fopen(publicKeyFilePath, "r");
 
-        if (infoFile == NULL || publicKeyFile == NULL) {
+        if (publicKeyFile == NULL) {
             // Errore nell'apertura di uno dei file, passa alla prossima sotto-cartella
             perror("Failed to open file");
-            if (infoFile != NULL) fclose(infoFile);
             if (publicKeyFile != NULL) fclose(publicKeyFile);
             continue;
         }
 
-        // Lettura dei dati dai file e inizializzazione del PeerInfo
-        PeerInfo* peerInfo = (PeerInfo*)malloc(sizeof(PeerInfo));
-
         peerInfo->pubKey = pubKey;
-
-        float balance = 0;
-
-        if (fscanf(infoFile, "%[^:]:%[^:]:%[^:]:%[^:]:%f",
-                   peerInfo->nome, peerInfo->cognome, peerInfo->username,
-                   peerInfo->password, &balance) != 5) {
-            // Errore nella lettura dei dati, passa alla prossima sottocartella
-            perror("Failed to read data from file");
-            fclose(infoFile);
-            fclose(publicKeyFile);
-            continue;
-        }
-
-        peerInfo->balance = balance;
-
-        // ... Altre operazioni necessarie per leggere le chiavi pubbliche e private
-        // ...
-
-
 
         // Stampa dei dati del PeerInfo
         printf("PeerInfo: %s\n", entry->d_name);
@@ -1194,8 +1281,6 @@ void readPeerInfoFromFolders(const char* parentFolder) {
         printEvpKey(peerInfo->pubKey);
         printf("\n");
 
-        // Chiudi i file
-        fclose(infoFile);
         fclose(publicKeyFile);
 
         insertEntry(peerList, peerInfo);
