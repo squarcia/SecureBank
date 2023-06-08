@@ -861,6 +861,7 @@ int register_executor() {
 
     char folderpath[256];
     char filepath[256];
+    char transactionpath[256];
 
     if (strcmp("Y", &answer) == 0 || strcmp("y", &answer) == 0) {
 
@@ -878,11 +879,18 @@ int register_executor() {
         // Concatenate the directory and filename to form the full file path
 
         snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
+        snprintf(transactionpath, sizeof(transactionpath), "%s/%s/transactions", directory, filename);
 
         //printf("FOLDERPATH: %s\n", folderpath);
 
         int result = mkdir(folderpath, 0777);
 
+        if (result != 0){
+            fprintf(stderr, "Error creating the directory.\n");
+            return -1;
+        }
+
+        result = mkdir(transactionpath, 0777);
 
         if (result != 0){
             fprintf(stderr, "Error creating the directory.\n");
@@ -1253,6 +1261,21 @@ void updateBalance() {
 
 int stop_executor() {
 
+    unsigned char pathInfo[1024];
+    // Salva info utente
+    snprintf(pathInfo, sizeof(pathInfo), "../client/registered/%s/info.txt", mySelf->username);
+    // Cifratura
+    char* formattedString = (char*)malloc(5 * 1024 * sizeof(char)); // Assumendo una lunghezza massima di 1024 caratteri per ogni campo
+    sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
+    printf("Form: %s", formattedString);
+    encryptFile(pathInfo, formattedString);
+
+    unsigned char *buffer = decryptFile(pathInfo);
+
+    printf("Buffer: %s", buffer);
+
+
+
 }
 
 
@@ -1417,6 +1440,26 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
 
         Transaction t = createTransaction(mySelf->transaction_table.transaction_count, name, amountOfMoney);
         addTransaction(t);
+
+        // Creazione della stringa con sprintf e delimitatore ":"
+        char transaction_string[256];
+        sprintf(transaction_string, "%d:%s:%.2f:%ld",
+                t.transaction_id,
+                t.account_number,
+                t.amount,
+                (long)t.timestamp);
+
+        printf("Transaction String: %s\n", transaction_string);
+
+        unsigned char pathTransaction[1024];
+        snprintf(pathTransaction, sizeof(pathTransaction), "../client/registered/%s/transactions/%s.txt", mySelf->username, t.transaction_id);
+
+        encryptFile(pathTransaction, transaction_string);
+
+        unsigned char *tRead = decryptFile(pathTransaction);
+
+        printf("TRansaction read: \n\n\n%s", tRead);
+
         printf("\t\t\t\t\t [*** TRANSACTION SAVED SUCCESSFULLY ***]\n\n\n", mySelf->username);
         return 1;
 
@@ -1780,8 +1823,6 @@ int sendMoney(char* message) {
             //printAllTransactions(&mySelf->transaction_table);
         }
     }
-
-    //encryptString();
 
     free(rec_s);
     free(rec);
@@ -2206,6 +2247,7 @@ void startEngine() {
         // Cifratura
         char* formattedString = (char*)malloc(5 * 1024 * sizeof(char)); // Assumendo una lunghezza massima di 1024 caratteri per ogni campo
         sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
+        printf("Formatted String: %s", formattedString);
         encryptFile(pathInfo, formattedString);
 
     } else {
