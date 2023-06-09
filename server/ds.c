@@ -238,6 +238,178 @@ void printPrivateKey(const EVP_PKEY* privateKey) {
     BIO_free(bio);
 }
 
+void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
+    FILE* file = fopen(keyPath, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Impossibile aprire il file per la lettura\n");
+        exit(1);
+    }
+
+    size_t bytesRead = fread(keyStore, 1, 256, file);
+
+    fclose(file);
+}
+
+
+void generateRandomIV(unsigned char *iv, int iv_len) {
+    if (RAND_bytes(iv, iv_len) != 1) {
+        fprintf(stderr, "Errore durante la generazione dell'IV casuale.\n");
+        exit(1);
+    }
+}
+
+
+void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *keyStore) {
+
+    // Genera IV casuale
+    unsigned char iv[EVP_MAX_IV_LENGTH];
+    int iv_len = EVP_CIPHER_iv_length(EVP_aes_128_cbc());
+    generateRandomIV(iv, iv_len);
+
+    // Apri file di testo cifrato
+    FILE* cipher_file = fopen(ciphertext_file, "wb");
+    if (!cipher_file) {
+        fprintf(stderr, "Errore: impossibile aprire il file '%s' (nessun permesso?)\n", ciphertext_file);
+        exit(1);
+    }
+
+    // Scrivi IV sul file cifrato
+    fwrite(iv, 1, iv_len, cipher_file);
+
+    // Crea e inizializza il contesto di crittografia
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
+        exit(1);
+    }
+
+    // Inizializza l'operazione di crittografia
+    int ret = EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: EncryptInit Failed\n");
+        exit(1);
+    }
+
+    // Buffer per i dati di input e output
+    //unsigned char in_buf[] = "CIAO";
+    unsigned char out_buf[1024 + EVP_MAX_BLOCK_LENGTH];
+
+    int num_bytes_written;
+
+    // Crittografa i dati
+    ret = EVP_EncryptUpdate(ctx, out_buf, &num_bytes_written, string, strlen(string) - 1);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: EncryptUpdate Failed\n");
+        exit(1);
+    }
+
+    fwrite(out_buf, 1, num_bytes_written, cipher_file);
+
+    // Finalizza l'operazione di crittografia
+    ret = EVP_EncryptFinal_ex(ctx, out_buf, &num_bytes_written);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: EncryptFinal Failed\n");
+        exit(1);
+    }
+
+    fwrite(out_buf, 1, num_bytes_written, cipher_file);
+
+    // Dealloca il contesto di crittografia
+    EVP_CIPHER_CTX_free(ctx);
+
+    // Chiudi il file
+    fclose(cipher_file);
+}
+
+unsigned char* decryptFile(const char* ciphertext_file, unsigned char *keyStore) {
+    // Apri il file cifrato
+    FILE* cipher_file = fopen(ciphertext_file, "rb");
+    if (!cipher_file) {
+        fprintf(stderr, "Errore: impossibile aprire il file '%s' (il file non esiste?)\n", ciphertext_file);
+        exit(1);
+    }
+
+    // Leggi IV dal file cifrato
+    unsigned char iv[EVP_MAX_IV_LENGTH];
+    int iv_len = EVP_CIPHER_iv_length(EVP_aes_128_cbc());
+    fread(iv, 1, iv_len, cipher_file);
+
+    // Crea e inizializza il contesto di decrittografia
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
+        exit(1);
+    }
+
+    // Inizializza l'operazione di decrittografia
+    int ret = EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: DecryptInit Failed\n");
+        exit(1);
+    }
+
+    // Buffer per i dati di input e output
+    unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
+    unsigned char out_buf[1024];
+    unsigned char* decrypted_data = NULL;
+    size_t decrypted_size = 0;
+
+    int num_bytes_read, num_bytes_written;
+
+    // Ciclo di decrittografia
+    while ((num_bytes_read = fread(in_buf, 1, sizeof(in_buf), cipher_file)) > 0) {
+        ret = EVP_DecryptUpdate(ctx, out_buf, &num_bytes_written, in_buf, num_bytes_read);
+        if (ret != 1) {
+            fprintf(stderr, "Errore: DecryptUpdate Failed\n");
+            exit(1);
+        }
+
+        // Espandi il buffer per la stringa decrittografata
+        size_t new_size = decrypted_size + num_bytes_written;
+        unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
+        if (new_decrypted_data == NULL) {
+            fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+            exit(1);
+        }
+
+        // Copia i dati decrittografati nel buffer espanso
+        memcpy(new_decrypted_data + decrypted_size, out_buf, num_bytes_written);
+
+        decrypted_data = new_decrypted_data;
+        decrypted_size = new_size;
+    }
+
+    // Finalizza l'operazione di decrittografia
+    ret = EVP_DecryptFinal_ex(ctx, out_buf, &num_bytes_written);
+    if (ret != 1) {
+        fprintf(stderr, "Errore: DecryptFinal Failed\n");
+        exit(1);
+    }
+
+    // Espandi il buffer per la stringa decrittografata per includere l'output finale
+    size_t new_size = decrypted_size + num_bytes_written;
+    unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
+    if (new_decrypted_data == NULL) {
+        fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+        exit(1);
+    }
+
+    // Copia l'output finale nel buffer espanso
+    memcpy(new_decrypted_data + decrypted_size, out_buf, num_bytes_written);
+
+    decrypted_data = new_decrypted_data;
+    decrypted_size = new_size;
+
+    // Dealloca il contesto di decrittografia
+    EVP_CIPHER_CTX_free(ctx);
+
+    // Chiudi il file
+    fclose(cipher_file);
+
+    // Restituisci il puntatore alla stringa decrittografata
+    return decrypted_data;
+}
+
 
 EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
     // Alloca un puntatore temporaneo per il buffer
@@ -395,6 +567,8 @@ void initializePaths() {
 
     //printPrivateKey(privateKey);
 }
+
+
 
 void print_hex(const unsigned char* data, size_t data_len, const unsigned char* title) {
 
@@ -959,6 +1133,25 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     return result;
 }
 
+void updateDestBalance(PeerInfo *peer) {
+    unsigned char pathInfo[1024];
+    unsigned char *folderpath = "../client/registered";
+    unsigned char pathKey[1024];
+    unsigned char keyStore[1024];
+    snprintf(pathKey, sizeof(pathKey), "%s/%s/key.txt", folderpath, peer->username);
+    printf("PathKey: %s", pathKey);
+    loadSharedSecretFromFile(keyStore, pathKey);
+
+
+    // Salva info utente
+    snprintf(pathInfo, sizeof(pathInfo), "%s/%s/%s", folderpath, peer->username, "info.txt");
+    // Cifratura
+    char* formattedString = (char*)malloc(5 * 1024 * sizeof(char)); // Assumendo una lunghezza massima di 1024 caratteri per ogni campo
+    sprintf(formattedString, "%s:%s:%s:%s:%f", peer->nome, peer->cognome, peer->username, peer->password, peer->balance);
+    printf("Formatted String: %s", formattedString);
+    encryptFile(pathInfo, formattedString, keyStore);
+}
+
 void elaborateTransaction(unsigned char *username, float amount, int sd) {
 
     // check user exists
@@ -1004,6 +1197,10 @@ void elaborateTransaction(unsigned char *username, float amount, int sd) {
         print_hex(signature, signature_length, "FIRMA");
 
         send_signed_message(sd, encrypted_message, encrypted_message_len, signature, signature_length);
+
+        // Update balance in .txt file of dest
+        updateDestBalance(dest->value);
+        updateDestBalance(mitt->value);
 
     } else {
         printf("Utente non esistente, riprovare");
@@ -1114,84 +1311,6 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
     // printPrivateKey(server_privkey);
 
     return keypair;
-}
-
-unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore) {
-
-    const unsigned char key[] = "0123456789012345";
-    // Apri il file cifrato
-    FILE* cipher_file = fopen(ciphertext_file, "rb");
-    if (!cipher_file) {
-        fprintf(stderr, "Errore: impossibile aprire il file '%s' (il file non esiste?)\n", ciphertext_file);
-        exit(1);
-    }
-
-    // Leggi IV dal file cifrato
-    unsigned char iv[EVP_MAX_IV_LENGTH];
-    int iv_len = EVP_CIPHER_iv_length(EVP_aes_128_cbc());
-    fread(iv, 1, iv_len, cipher_file);
-
-    // Crea e inizializza il contesto di decrittografia
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
-        exit(1);
-    }
-
-    // Inizializza l'operazione di decrittografia
-    int ret = EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
-    if (ret != 1) {
-        fprintf(stderr, "Errore: DecryptInit Failed\n");
-        exit(1);
-    }
-
-    // Buffer per i dati di input e output
-    unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
-    unsigned char out_buf[1024];
-
-    int num_bytes_read, num_bytes_written;
-
-    // Ciclo di decrittografia
-    while ((num_bytes_read = fread(in_buf, 1, sizeof(in_buf), cipher_file)) > 0) {
-        ret = EVP_DecryptUpdate(ctx, out_buf, &num_bytes_written, in_buf, num_bytes_read);
-        if (ret != 1) {
-            fprintf(stderr, "Errore: DecryptUpdate Failed\n");
-            exit(1);
-        }
-
-        fwrite(out_buf, 1, num_bytes_written, stdout);
-    }
-
-    // Finalizza l'operazione di decrittografia
-    ret = EVP_DecryptFinal_ex(ctx, out_buf, &num_bytes_written);
-    if (ret != 1) {
-        fprintf(stderr, "Errore: DecryptFinal Failed\n");
-        exit(1);
-    }
-
-    fwrite(out_buf, 1, num_bytes_written, stdout);
-
-    // Dealloca il contesto di decrittografia
-    EVP_CIPHER_CTX_free(ctx);
-
-    // Chiudi il file
-    fclose(cipher_file);
-
-    return out_buf;
-}
-
-void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
-    FILE* file = fopen(keyPath, "rb");
-    if (file == NULL) {
-        fprintf(stderr, "Impossibile aprire il file per la lettura\n");
-        exit(1);
-    }
-
-    size_t bytesRead = fread(keyStore, 1, 256, file);
-
-    fclose(file);
-
-
 }
 
 
@@ -1544,8 +1663,6 @@ int main() {
 
                             send_signed_message(sd, encrypted_message, encrypted_message_len, signature, signature_length);
 
-
-                            //ssend(str, sd);
                         }
 
 

@@ -26,6 +26,7 @@
 #include <openssl/hmac.h>
 #include <termios.h>
 #include <ctype.h>
+#include <dirent.h>
 
 
 struct server_info {
@@ -83,6 +84,8 @@ const unsigned char pathPubK[1024];
 PeerInfo *mySelf;
 
 int registered = 0;
+
+int numTransaction = 0;
 
 unsigned char keyStore[1024];
 
@@ -148,6 +151,30 @@ void printAllTransactions(const TransactionTable * object) {
 
     printf("\n");
 
+}
+
+
+int countFilesInDirectory(const char* directoryPath) {
+    int fileCount = 0;
+    DIR* directory;
+    struct dirent* entry;
+
+    directory = opendir(directoryPath);
+
+    if (directory == NULL) {
+        perror("Errore durante l'apertura della cartella");
+        return -1;
+    }
+
+    while ((entry = readdir(directory)) != NULL) {
+        if (entry->d_type == DT_REG) {  // Controlla se è un file regolare
+            fileCount++;
+        }
+    }
+
+    closedir(directory);
+
+    return fileCount;
 }
 
 
@@ -344,7 +371,7 @@ void generateRandomIV(unsigned char *iv, int iv_len) {
     }
 }
 
-void encryptFile(const char* ciphertext_file, unsigned char *string) {
+void encryptFile(unsigned char* ciphertext_file, char *string) {
 
     // Genera IV casuale
     unsigned char iv[EVP_MAX_IV_LENGTH];
@@ -382,7 +409,7 @@ void encryptFile(const char* ciphertext_file, unsigned char *string) {
     int num_bytes_written;
 
     // Crittografa i dati
-    ret = EVP_EncryptUpdate(ctx, out_buf, &num_bytes_written, string, sizeof(string) - 1);
+    ret = EVP_EncryptUpdate(ctx, out_buf, &num_bytes_written, string, strlen(string) - 1);
     if (ret != 1) {
         fprintf(stderr, "Errore: EncryptUpdate Failed\n");
         exit(1);
@@ -407,8 +434,6 @@ void encryptFile(const char* ciphertext_file, unsigned char *string) {
 }
 
 unsigned char* decryptFile(const char* ciphertext_file) {
-
-    const unsigned char key[] = "0123456789012345";
     // Apri il file cifrato
     FILE* cipher_file = fopen(ciphertext_file, "rb");
     if (!cipher_file) {
@@ -438,6 +463,8 @@ unsigned char* decryptFile(const char* ciphertext_file) {
     // Buffer per i dati di input e output
     unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
     unsigned char out_buf[1024];
+    unsigned char* decrypted_data = NULL;
+    size_t decrypted_size = 0;
 
     int num_bytes_read, num_bytes_written;
 
@@ -449,7 +476,19 @@ unsigned char* decryptFile(const char* ciphertext_file) {
             exit(1);
         }
 
-        fwrite(out_buf, 1, num_bytes_written, stdout);
+        // Espandi il buffer per la stringa decrittografata
+        size_t new_size = decrypted_size + num_bytes_written;
+        unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
+        if (new_decrypted_data == NULL) {
+            fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+            exit(1);
+        }
+
+        // Copia i dati decrittografati nel buffer espanso
+        memcpy(new_decrypted_data + decrypted_size, out_buf, num_bytes_written);
+
+        decrypted_data = new_decrypted_data;
+        decrypted_size = new_size;
     }
 
     // Finalizza l'operazione di decrittografia
@@ -459,7 +498,19 @@ unsigned char* decryptFile(const char* ciphertext_file) {
         exit(1);
     }
 
-    fwrite(out_buf, 1, num_bytes_written, stdout);
+    // Espandi il buffer per la stringa decrittografata per includere l'output finale
+    size_t new_size = decrypted_size + num_bytes_written;
+    unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
+    if (new_decrypted_data == NULL) {
+        fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+        exit(1);
+    }
+
+    // Copia l'output finale nel buffer espanso
+    memcpy(new_decrypted_data + decrypted_size, out_buf, num_bytes_written);
+
+    decrypted_data = new_decrypted_data;
+    decrypted_size = new_size;
 
     // Dealloca il contesto di decrittografia
     EVP_CIPHER_CTX_free(ctx);
@@ -467,7 +518,8 @@ unsigned char* decryptFile(const char* ciphertext_file) {
     // Chiudi il file
     fclose(cipher_file);
 
-    return out_buf;
+    // Restituisci il puntatore alla stringa decrittografata
+    return decrypted_data;
 }
 
 void saveSharedSecretToFile(const unsigned char* keyStore, size_t sharedSecretSize, const char* keyPath) {
@@ -1259,7 +1311,67 @@ void updateBalance() {
 
 }
 
+Transaction createTransactionFromString(const char* transactionString) {
+    Transaction transaction;
+
+    // Analizza la stringa per estrarre i valori dei campi
+    sscanf(transactionString, "%d:%19[^:]:%lf:%ld:", &transaction.transaction_id, transaction.account_number, &transaction.amount, &transaction.timestamp);
+
+    return transaction;
+}
+
+void readFilesInDirectory(const char *directoryPath) {
+    DIR *dir;
+    struct dirent *entry;
+
+    // Apri la directory
+    dir = opendir(directoryPath);
+
+    if (dir == NULL) {
+        printf("Impossibile aprire la directory %s\n", directoryPath);
+        return;
+    }
+
+    // Leggi i file nella directory
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG) {  // Verifica se l'elemento è un file regolare
+            char filePath[256];
+            strcpy(filePath, directoryPath);
+            strcat(filePath, "/");
+            strcat(filePath, entry->d_name);
+
+            // Verifica se il file ha estensione .txt
+            if (strstr(entry->d_name, ".txt") != NULL) {
+
+                //snprintf(pathInfo, sizeof(pathInfo), "../client/registered/%s/info.txt", mySelf->username);
+                unsigned char *buffer = decryptFile(filePath);
+
+                printf("Contenuto del file %s:\n", buffer);
+
+                Transaction t = createTransactionFromString(buffer);
+                // Stampa i valori della transazione
+                printf("Transaction ID: %d\n", t.transaction_id);
+                printf("Account Number: %s\n", t.account_number);
+                printf("Amount: %.2f\n", t.amount);
+                printf("Timestamp: %ld\n", t.timestamp);
+
+
+                printf("\n");
+            }
+        }
+    }
+
+    // Chiudi la directory
+    closedir(dir);
+}
+
 int stop_executor() {
+
+    unsigned char directoryPath[1024];
+    sprintf(directoryPath, "../client/registered/%s/transactions", mySelf->username);
+
+    readFilesInDirectory(directoryPath);
+    /*
 
     unsigned char pathInfo[1024];
     // Salva info utente
@@ -1274,8 +1386,10 @@ int stop_executor() {
 
     printf("Buffer: %s", buffer);
 
+    close(server_sock);
 
-
+    exit(1);
+     */
 }
 
 
@@ -1438,27 +1552,31 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
 
         int amountOfMoney = atoi(amount);
 
-        Transaction t = createTransaction(mySelf->transaction_table.transaction_count, name, amountOfMoney);
+        Transaction t = createTransaction(numTransaction, name, amountOfMoney);
         addTransaction(t);
+
+        numTransaction++;
 
         // Creazione della stringa con sprintf e delimitatore ":"
         char transaction_string[256];
         sprintf(transaction_string, "%d:%s:%.2f:%ld",
-                t.transaction_id,
+                numTransaction,
                 t.account_number,
                 t.amount,
                 (long)t.timestamp);
 
+        numTransaction++;
+
         printf("Transaction String: %s\n", transaction_string);
 
         unsigned char pathTransaction[1024];
-        snprintf(pathTransaction, sizeof(pathTransaction), "../client/registered/%s/transactions/%s.txt", mySelf->username, t.transaction_id);
+        snprintf(pathTransaction, sizeof(pathTransaction), "../client/registered/%s/transactions/%d.txt", mySelf->username, t.transaction_id);
 
         encryptFile(pathTransaction, transaction_string);
 
-        unsigned char *tRead = decryptFile(pathTransaction);
+        unsigned char* buffer = decryptFile(pathTransaction);
 
-        printf("TRansaction read: \n\n\n%s", tRead);
+        printf("\n\nTransaction: %s", buffer);
 
         printf("\t\t\t\t\t [*** TRANSACTION SAVED SUCCESSFULLY ***]\n\n\n", mySelf->username);
         return 1;
@@ -1505,258 +1623,6 @@ void sendPublicKey(int socket, EVP_PKEY* publicKey) {
 
     free(buffer);
 }
-/*
-void encryptString() {
-    int ret; // used for return values
-
-    // Dichiarazione e inizializzazione di una transazione
-    Transaction transaction;
-    transaction.transaction_id = 1;
-    strcpy(transaction.account_number, "1234567890");
-    transaction.amount = 100.0;
-    transaction.timestamp = time(NULL);
-
-    // Formattazione della transazione come stringa
-    char clear_buf[256];
-    sprintf(clear_buf, "%d:%s:%f:%ld", transaction.transaction_id, transaction.account_number, transaction.amount, transaction.timestamp);
-
-    // Lunghezza della stringa della transazione
-    int clear_size = strlen(clear_buf);
-
-
-    // declare some useful variables
-    const EVP_CIPHER *cipher = EVP_aes_128_cbc();
-    int iv_len = EVP_CIPHER_iv_length(cipher);
-    int block_size = EVP_CIPHER_block_size(cipher);
-
-    // Allocate memory for and randomly generate IV
-    unsigned char *iv = (unsigned char *)malloc(iv_len);
-    // Seed OpenSSL PRNG
-    RAND_poll();
-    // Generate 16 bytes at random. That is my IV
-    ret = RAND_bytes((unsigned char *)&iv[0], iv_len);
-    if (ret != 1) {
-        printf("Error: RAND_bytes Failed\n");
-        exit(1);
-    }
-    // check for possible integer overflow in (clear_size + block_size) --> PADDING
-    // (possible if the plaintext is too big, assume non-negative clear_size and block_size)
-    if (clear_size > INT_MAX - block_size) {
-        printf("Error: integer overflow (file too big?)\n");
-        exit(1);
-    }
-    // allocate a buffer for the ciphertext
-    int enc_buffer_size = clear_size + block_size;
-    unsigned char *cphr_buf = (unsigned char *)malloc(enc_buffer_size);
-    if (!cphr_buf) {
-        printf("Error: malloc returned NULL (file too big?)\n");
-        exit(1);
-    }
-
-    // Create and initialise the context with used cipher, key, and IV
-    EVP_CIPHER_CTX *ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        printf("Error: EVP_CIPHER_CTX_new returned NULL\n");
-        exit(1);
-    }
-    ret = EVP_EncryptInit(ctx, cipher, shared_secret, iv);
-    if (ret != 1) {
-        printf("Error: EncryptInit Failed\n");
-        exit(1);
-    }
-    int update_len = 0; // bytes encrypted at each chunk
-    int total_len = 0;  // total encrypted bytes
-
-    // Encrypt Update: one call is enough because our file is small
-    ret = EVP_EncryptUpdate(ctx, cphr_buf, &update_len, clear_buf, clear_size);
-    if (ret != 1) {
-        printf("Error: EncryptUpdate Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-
-    // Encrypt Final. Finalize the encryption and add the padding
-    ret = EVP_EncryptFinal(ctx, cphr_buf + total_len, &update_len);
-    if (ret != 1) {
-        printf("Error: EncryptFinal Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-    int cphr_size = total_len;
-
-    // delete the context and the plaintext from memory
-    EVP_CIPHER_CTX_free(ctx);
-    // Clear the memory containing the plaintext
-    memset(clear_buf, 0, clear_size);
-
-    // write the encrypted key, the IV, and the ciphertext into a '.enc' file
-    char cphr_file_name[256];
-    snprintf(cphr_file_name, sizeof(cphr_file_name), "%s.enc", "encrypted");
-    FILE *cphr_file = fopen(cphr_file_name, "wb");
-    if (!cphr_file) {
-        printf("Error: cannot open file '%s' (no permissions?)\n", cphr_file_name);
-        exit(1);
-    }
-
-    ret = fwrite(iv, 1, EVP_CIPHER_iv_length(cipher), cphr_file);
-    if (ret < EVP_CIPHER_iv_length(cipher)) {
-        printf("Error while writing the file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-
-    ret = fwrite(cphr_buf, 1, cphr_size, cphr_file);
-    if (ret < cphr_size) {
-        printf("Error while writing the file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-
-    fclose(cphr_file);
-
-    printf("File '%s' encrypted into file '%s'\n", "encrypted.enc", cphr_file_name);
-
-    // deallocate buffers
-    free(cphr_buf);
-    free(iv);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-}
-
-void decryptString() {
-    int ret; // utilizzato per i valori di ritorno
-
-    // leggi il file da decifrare dalla tastiera
-    char *cphr_file_name = "encrypted.enc";
-
-    // apri il file da decifrare
-    FILE *cphr_file = fopen(cphr_file_name, "rb");
-    if (!cphr_file) {
-        printf("Error: cannot open file '%s' (file does not exist?)\n", cphr_file_name);
-        exit(1);
-    }
-
-    // ottieni la dimensione del file
-    fseek(cphr_file, 0, SEEK_END);
-    long int cphr_file_size = ftell(cphr_file);
-    fseek(cphr_file, 0, SEEK_SET);
-
-    // dichiara alcune variabili utili
-    const EVP_CIPHER *cipher = EVP_aes_128_cbc();
-    int iv_len = EVP_CIPHER_iv_length(cipher);
-
-    // Alloca i buffer per IV, ciphertext e plaintext
-    unsigned char *iv = (unsigned char *)malloc(iv_len);
-    int cphr_size = cphr_file_size - iv_len;
-    unsigned char *cphr_buf = (unsigned char *)malloc(cphr_size);
-    unsigned char *clear_buf = (unsigned char *)malloc(cphr_size) + 1024;
-    if (!iv || !cphr_buf || !clear_buf) {
-        printf("Error: malloc returned NULL (file too big?)\n");
-        exit(1);
-    }
-
-    // leggi IV e ciphertext dal file
-    ret = fread(iv, 1, iv_len, cphr_file);
-    if (ret < iv_len) {
-        printf("Error while reading file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-    ret = fread(cphr_buf, 1, cphr_size, cphr_file);
-    if (ret < cphr_size) {
-        printf("Error while reading file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-    fclose(cphr_file);
-
-    // Crea e inizializza il contesto
-    EVP_CIPHER_CTX *ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        printf("Error: EVP_CIPHER_CTX_new returned NULL\n");
-        exit(1);
-    }
-    ret = EVP_DecryptInit(ctx, cipher, shared_secret, iv);
-    if (ret != 1) {
-        printf("Error: DecryptInit Failed\n");
-        exit(1);
-    }
-
-    int update_len = 0; // bytes decifrati ad ogni chunk
-    int total_len = 0;  // totale bytes decifrati
-
-    // Decifratura Update: una sola chiamata è sufficiente perché il ciphertext è piccolo
-    ret = EVP_DecryptUpdate(ctx, clear_buf, &update_len, cphr_buf, cphr_size);
-    if (ret != 1) {
-        printf("Error: DecryptUpdate Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-
-    // Decifratura Finale. Finalizza la decifratura e aggiunge il padding
-    ret = EVP_DecryptFinal(ctx, clear_buf + total_len, &update_len);
-    if (ret != 1) {
-        printf("Error: DecryptFinal Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-    int clear_size = total_len;
-
-    // Elimina il contesto dalla memoria
-    EVP_CIPHER_CTX_free(ctx);
-
-    // Scrivi il plaintext in un file '.dec'
-    char clear_file_name[256];
-    snprintf(clear_file_name, sizeof(clear_file_name), "%s.dec", cphr_file_name);
-    FILE *clear_file = fopen(clear_file_name, "wb");
-    if (!clear_file) {
-        printf("Error: cannot open file '%s' (no permissions?)\n", clear_file_name);
-        exit(1);
-    }
-    ret = fwrite(clear_buf, 1, clear_size, clear_file);
-    if (ret < clear_size) {
-        printf("Error while writing the file '%s'\n", clear_file_name);
-        exit(1);
-    }
-    fclose(clear_file);
-
-    // Stampa l'IV utilizzato su stdout
-    printf("Used IV:\n");
-    for (int i = 0; i < iv_len; i++) {
-        printf("%02x ", iv[i]);
-    }
-    printf("\n");
-
-    // Elimina il plaintext dalla memoria
-    memset(clear_buf, 0, clear_size);
-    free(clear_buf);
-
-    printf("File '%s' decrypted into file '%s', clear size is %d bytes\n", cphr_file_name, clear_file_name, clear_size);
-
-    // Libera i buffer
-    free(iv);
-    free(cphr_buf);
-
-}
-*/
 
 
 // Funzione per inviare soldi a un'altra persona
@@ -2197,13 +2063,13 @@ void startEngine() {
     }
 
     // Calcola la lunghezza totale della stringa da inviare
-    int stringLength = snprintf(NULL, 0, "1:%s", mySelf->nome);
+    int stringLength = snprintf(NULL, 0, "1:%s", mySelf->username);
 
     // Alloca memoria per la stringa risultante
     message = malloc((stringLength + 1) * sizeof(char));
 
     // Costruisci la stringa formattata
-    sprintf(message, "1:%s", mySelf->nome);
+    sprintf(message, "1:%s", mySelf->username);
 
     // Invio del messaggio al server
     send(server->server_sock, message, stringLength, 0);
@@ -2261,6 +2127,11 @@ void startEngine() {
         // Carica info utente
         decryptFile(pathInfo);
     }
+
+    // Set number of transactions
+    unsigned char pathTransactions[1024];
+    snprintf(pathTransactions, sizeof(pathTransactions), "%s/%s/transactions", folderpath, mySelf->username);
+    numTransaction = countFilesInDirectory(pathTransactions);
 
     sendPubKey();
 }
