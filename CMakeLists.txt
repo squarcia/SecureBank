@@ -7,11 +7,11 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -I/opt/homebrew/opt/openssl@3/include")
 set(ENV{LD_LIBRARY_PATH} "/opt/homebrew/opt/openssl@3/lib")
 
-# Aggiungi il primo file sorgente al progetto
-add_executable(ds server/ds.c)
+# Aggiungi il file client.c al progetto e includi le relative intestazioni
+add_executable(client client/client.c client/client_protocol.h client/client.h)
 
-# Aggiungi il secondo file sorgente al progetto
-add_executable(client client/client.c)
+# Aggiungi il file ds.c al progetto e includi le relative intestazioni
+add_executable(ds server/ds.c server/server_protocol.h server/server.h)
 
 # Collega le librerie di OpenSSL
 find_library(SSL_LIBRARY ssl HINTS "/opt/homebrew/opt/openssl@3/lib" NO_DEFAULT_PATH)

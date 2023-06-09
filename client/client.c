@@ -1,92 +1,4 @@
-#define PORT	 8080
-#define COMMANDS 5
-#define MAX_TRANSACTIONS 1000
-#define COMMAND_PREFIX '!'
-#define BUFFER_SIZE 1024
-#define MAX_KEY_SIZE 2048
-#define HMAC_SIZE 32
-#define NONCE_SIZE 16
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <time.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/aes.h>
-#include <openssl/x509.h>
-#include <openssl/x509_vfy.h>
-#include <openssl/rand.h>
-#include <openssl/hmac.h>
-#include <termios.h>
-#include <ctype.h>
-#include <dirent.h>
-
-
-struct server_info {
-    EVP_PKEY* serverPublicKey;
-    struct sockaddr_in serv_addr;
-    int server_sock;
-};
-
-typedef struct {
-    int transaction_id;
-    char account_number[20];
-    double amount;
-    time_t timestamp;
-    // Altri campi pertinenti
-} Transaction;
-
-typedef struct {
-    Transaction* transactions;
-    int transaction_count;
-    // Altri campi della tabella hash
-} TransactionTable;
-
-typedef struct {
-    int port;
-    char nome[BUFFER_SIZE];
-    char cognome[BUFFER_SIZE];
-    char username[BUFFER_SIZE];
-    char password[BUFFER_SIZE];
-    float balance;
-    EVP_PKEY **pubKey;
-    TransactionTable transaction_table;
-} PeerInfo;
-
-typedef int (*cmd_executor)(char* arg);
-
-struct server_info *server;
-
-/* File Descriptor */
-fd_set master;
-fd_set read_fds;
-int fdmax;
-
-int server_sock = 0;
-
-/* Diffie-Hellman parameters */
-unsigned char* shared_secret;
-
-int crypted = 0;
-
-EVP_PKEY* serverPublicKey = NULL;
-
-const unsigned char pathPrivK[BUFFER_SIZE];
-const unsigned char pathPubK[BUFFER_SIZE];
-
-PeerInfo *mySelf;
-
-int registered = 0;
-
-int numTransaction = 0;
-
-unsigned char keyStore[BUFFER_SIZE];
+#include "client_protocol.h"
 
 const char* valid_cmds[] = {"sendMoney", "showBalance", "deposit","history", "stop"};
 
@@ -110,14 +22,6 @@ void addTransaction(Transaction transaction) {
     mySelf->transaction_table.transaction_count++;
 }
 
-Transaction* getTransaction(int transaction_id) {
-    for (int i = 0; i < mySelf->transaction_table.transaction_count; i++) {
-        if (mySelf->transaction_table.transactions[i].transaction_id == transaction_id) {
-            return &mySelf->transaction_table.transactions[i];
-        }
-    }
-}
-
 void printDate(time_t currentTime) {
 
     // Converti il timestamp in una struttura tm
@@ -128,31 +32,8 @@ void printDate(time_t currentTime) {
     strftime(formattedTime, sizeof(formattedTime), "%Y-%m-%d %H:%M:%S", timeinfo);
 
     // Stampa la data formattata
-    printf("Data e ora: %s\n", formattedTime);
+    printf("%s\n", formattedTime);
 }
-
-
-void printAllTransactions(const TransactionTable * object) {
-    printf("*****************************\n");
-    printf("*         TRANSACTIONS      *\n");
-    printf("*****************************\n");
-
-    for (int i = 0; i < object->transaction_count; i++) {
-        const Transaction* transaction = &(object->transactions[i]);
-
-        printf("Transazione %d:\n", i+1);
-        printf("ID: %s\n", transaction->account_number);
-        printf("Amount: %.2f€\n", transaction->amount);
-
-        printDate(transaction->timestamp);
-
-        printf("------------------------------\n");
-    }
-
-    printf("\n");
-
-}
-
 
 int countFilesInDirectory(const char* directoryPath) {
     int fileCount = 0;
@@ -558,8 +439,9 @@ int loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
     }
 
     size_t bytesRead = fread(keyStore, 1, 256, file);
-
     fclose(file);
+
+    return 1;
 }
 
 // Funzione per verificare la firma di un messaggio
@@ -660,236 +542,6 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     return result;
 }
 
-void encryptUser() {
-    int ret; // used for return values
-
-    // Dichiarazione e inizializzazione di una transazione
-    Transaction transaction;
-    transaction.transaction_id = 1;
-    strcpy(transaction.account_number, "1234567890");
-    transaction.amount = 100.0;
-    transaction.timestamp = time(NULL);
-
-    // Formattazione della transazione come stringa
-    char clear_buf[256];
-    sprintf(clear_buf, "%s:%s:%s:%s",mySelf->nome, mySelf->cognome);
-
-    // Lunghezza della stringa della transazione
-    int clear_size = strlen(clear_buf);
-
-
-    // declare some useful variables
-    const EVP_CIPHER *cipher = EVP_aes_128_cbc();
-    int iv_len = EVP_CIPHER_iv_length(cipher);
-    int block_size = EVP_CIPHER_block_size(cipher);
-
-    // Allocate memory for and randomly generate IV
-    unsigned char *iv = (unsigned char *)malloc(iv_len);
-    // Seed OpenSSL PRNG
-    RAND_poll();
-    // Generate 16 bytes at random. That is my IV
-    ret = RAND_bytes((unsigned char *)&iv[0], iv_len);
-    if (ret != 1) {
-        printf("Error: RAND_bytes Failed\n");
-        exit(1);
-    }
-    // check for possible integer overflow in (clear_size + block_size) --> PADDING
-    // (possible if the plaintext is too big, assume non-negative clear_size and block_size)
-    if (clear_size > INT_MAX - block_size) {
-        printf("Error: integer overflow (file too big?)\n");
-        exit(1);
-    }
-    // allocate a buffer for the ciphertext
-    int enc_buffer_size = clear_size + block_size;
-    unsigned char *cphr_buf = (unsigned char *)malloc(enc_buffer_size);
-    if (!cphr_buf) {
-        printf("Error: malloc returned NULL (file too big?)\n");
-        exit(1);
-    }
-
-    // Create and initialise the context with used cipher, key, and IV
-    EVP_CIPHER_CTX *ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        printf("Error: EVP_CIPHER_CTX_new returned NULL\n");
-        exit(1);
-    }
-    ret = EVP_EncryptInit(ctx, cipher, keyStore, iv);
-    if (ret != 1) {
-        printf("Error: EncryptInit Failed\n");
-        exit(1);
-    }
-    int update_len = 0; // bytes encrypted at each chunk
-    int total_len = 0;  // total encrypted bytes
-
-    // Encrypt Update: one call is enough because our file is small
-    ret = EVP_EncryptUpdate(ctx, cphr_buf, &update_len, clear_buf, clear_size);
-    if (ret != 1) {
-        printf("Error: EncryptUpdate Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-
-    // Encrypt Final. Finalize the encryption and add the padding
-    ret = EVP_EncryptFinal(ctx, cphr_buf + total_len, &update_len);
-    if (ret != 1) {
-        printf("Error: EncryptFinal Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-    int cphr_size = total_len;
-
-    // delete the context and the plaintext from memory
-    EVP_CIPHER_CTX_free(ctx);
-    // Clear the memory containing the plaintext
-    memset(clear_buf, 0, clear_size);
-
-    // write the encrypted key, the IV, and the ciphertext into a '.enc' file
-    char cphr_file_name[256];
-    snprintf(cphr_file_name, sizeof(cphr_file_name), "%s.enc", "../client/registered/a/transactions/encrypted");
-    FILE *cphr_file = fopen(cphr_file_name, "wb");
-    if (!cphr_file) {
-        printf("Error: cannot open file '%s' (no permissions?)\n", cphr_file_name);
-        exit(1);
-    }
-
-    ret = fwrite(iv, 1, EVP_CIPHER_iv_length(cipher), cphr_file);
-    if (ret < EVP_CIPHER_iv_length(cipher)) {
-        printf("Error while writing the file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-
-    ret = fwrite(cphr_buf, 1, cphr_size, cphr_file);
-    if (ret < cphr_size) {
-        printf("Error while writing the file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-
-    fclose(cphr_file);
-
-    printf("File '%s' encrypted into file '%s'\n", "encrypted.enc", cphr_file_name);
-
-    // deallocate buffers
-    free(cphr_buf);
-    free(iv);
-
-
-
-}
-
-void decryptUser() {
-    int ret; // utilizzato per i valori di ritorno
-
-    // leggi il file da decifrare dalla tastiera
-    char *cphr_file_name = "../client/registered/a/transactions/encrypted.enc";
-
-    // apri il file da decifrare
-    FILE *cphr_file = fopen(cphr_file_name, "rb");
-    if (!cphr_file) {
-        printf("Error: cannot open file '%s' (file does not exist?)\n", cphr_file_name);
-        exit(1);
-    }
-
-    // ottieni la dimensione del file
-    fseek(cphr_file, 0, SEEK_END);
-    long int cphr_file_size = ftell(cphr_file);
-    fseek(cphr_file, 0, SEEK_SET);
-
-    // dichiara alcune variabili utili
-    const EVP_CIPHER *cipher = EVP_aes_128_cbc();
-    int iv_len = EVP_CIPHER_iv_length(cipher);
-
-    // Alloca i buffer per IV, ciphertext e plaintext
-    unsigned char *iv = (unsigned char *)malloc(iv_len);
-    int cphr_size = cphr_file_size - iv_len;
-    unsigned char *cphr_buf = (unsigned char *)malloc(cphr_size);
-    unsigned char *clear_buf = (unsigned char *)malloc(cphr_size);
-    if (!iv || !cphr_buf || !clear_buf) {
-        printf("Error: malloc returned NULL (file too big?)\n");
-        exit(1);
-    }
-
-    // leggi IV e ciphertext dal file
-    ret = fread(iv, 1, iv_len, cphr_file);
-    if (ret < iv_len) {
-        printf("Error while reading file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-    ret = fread(cphr_buf, 1, cphr_size, cphr_file);
-    if (ret < cphr_size) {
-        printf("Error while reading file '%s'\n", cphr_file_name);
-        exit(1);
-    }
-    fclose(cphr_file);
-
-    // Crea e inizializza il contesto
-    EVP_CIPHER_CTX *ctx;
-    ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        printf("Error: EVP_CIPHER_CTX_new returned NULL\n");
-        exit(1);
-    }
-    ret = EVP_DecryptInit(ctx, cipher, keyStore, iv);
-    if (ret != 1) {
-        printf("Error: DecryptInit Failed\n");
-        exit(1);
-    }
-
-    int update_len = 0; // bytes decifrati ad ogni chunk
-    int total_len = 0;  // totale bytes decifrati
-
-    // Decifratura Update: una sola chiamata è sufficiente perché il ciphertext è piccolo
-    ret = EVP_DecryptUpdate(ctx, clear_buf, &update_len, cphr_buf, cphr_size);
-    if (ret != 1) {
-        printf("Error: DecryptUpdate Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-
-    // Decifratura Finale. Finalizza la decifratura e aggiunge il padding
-    ret = EVP_DecryptFinal(ctx, clear_buf + total_len, &update_len);
-    if (ret != 1) {
-        printf("Error: DecryptFinal Failed\n");
-        exit(1);
-    }
-    total_len += update_len;
-    int clear_size = total_len;
-
-    // Elimina il contesto dalla memoria
-    EVP_CIPHER_CTX_free(ctx);
-
-
-    printf("Clear buf: %s", clear_buf);
-
-    // Conversione del testo decifrato in una transazione
-    char* transaction_str = (char*)clear_buf;
-    Transaction transaction;
-
-    // Prima chiamata a strtok per ottenere il primo token
-    char* token = strtok(clear_buf, ":");
-
-    // Assegna il valore del primo campo all'id della transazione
-    transaction.transaction_id = atoi(token);
-
-    // Chiamata successiva a strtok per ottenere i token successivi
-    token = strtok(NULL, ":");
-    strcpy(transaction.account_number, token);
-
-    token = strtok(NULL, ":");
-    transaction.amount = atof(token);
-
-    token = strtok(NULL, ":");
-    transaction.timestamp = atol(token);
-
-    // Stampa i valori estratti
-    printf("ID: %d\n", transaction.transaction_id);
-    printf("Account: %s\n", transaction.account_number);
-    printf("Amount: %.6f\n", transaction.amount);
-    printf("Timestamp: %ld\n", transaction.timestamp);
-
-}
-
-
 int register_executor() {
 
     char *nome,
@@ -900,7 +552,7 @@ int register_executor() {
     int balance = 0;
     char answer;
 
-    printf("\t\t\t\t\t [*** REGISTRATION SECTION ***]\n", mySelf->username);
+    printf("\t\t\t\t\t [*** REGISTRATION SECTION ***]\n");
 
     nome = malloc(sizeof(char) * 20);
     printf("Nome:[] ");
@@ -1024,7 +676,7 @@ int register_executor() {
     generate_keypair(pathPrivK, pathPubK);
     printf("\t\t\t\t\t [*** KEY-PAIR GENERATED SUCCESSULLY! ***]\n");
 
-
+    return 1;
 }
 
 int checkExistingUser(const char* username, const char* pwd) {
@@ -1071,11 +723,11 @@ int checkExistingUser(const char* username, const char* pwd) {
     }
 }
 
-void print_help(){
+void print_help() {
     printf("%s", help_msg);
 }
 
-int _parse_command(char* line, size_t line_len, char** cmd, char** arg){
+int parse_command(char* line, size_t line_len, char** cmd, char** arg){
     if (line[line_len - 1] == '\n'){
         line[line_len - 1] = 0;
         --line_len;
@@ -1131,7 +783,6 @@ void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned c
         handle_error("Failed to initialize HMAC");
     }
 
-    //print_hex(data, data_len, "INSIDE HMAC CALC");
 
     if (HMAC_Update(ctx, data, data_len) != 1) {
         handle_error("Failed to update HMAC");
@@ -1142,7 +793,6 @@ void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned c
         handle_error("Failed to finalize HMAC");
     }
 
-    //print_hex(hmac, hmac_len, "HMAC FINAL");
 
     HMAC_CTX_free(ctx);
 }
@@ -1153,13 +803,13 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, uns
     if (RAND_bytes(iv, 16) != 1) {
         handle_error("Failed to generate IV");
     }
-    //print_hex(iv, 16, "IV");
+
     // Generate a random nonce
     unsigned char nonce[16];
     if (RAND_bytes(nonce, 16) != 1) {
         handle_error("Failed to generate nonce");
     }
-    //print_hex(nonce, 16, "NONCE");
+
     // Create an encryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
@@ -1186,9 +836,8 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, uns
 
     // Calculate HMAC for the ciphertext
     unsigned char hmac[32];
-    //print_hex(ciphertext, ciphertext_len, "CIPHERTEXT");
+
     calculate_hmac(ciphertext, ciphertext_len, shared_secret, strlen(shared_secret), hmac);
-    //print_hex(hmac, 32, "HMAC");
 
     // Prepare the final message by concatenating IV, nonce, ciphertext, and HMAC
     memcpy(ciphertext + ciphertext_len, iv, AES_BLOCK_SIZE);
@@ -1210,21 +859,15 @@ int extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsig
     size_t hmac_offset = ciphertext_len - HMAC_SIZE;
 
     memcpy(iv, ciphertext + iv_offset, 16);
-    //print_hex(iv, 16, "IV Val");
     memcpy(nonce, ciphertext + nonce_offset, NONCE_SIZE);
-    //print_hex(nonce, NONCE_SIZE, "NONCE Val");
     memcpy(hmac, ciphertext + hmac_offset, HMAC_SIZE);
 
     unsigned char* ciphertext_only = (unsigned char*)malloc(ciphertext_len - 64);
     memcpy(ciphertext_only, ciphertext, ciphertext_len - 64);
-    //print_hex(ciphertext_only, strlen(ciphertext_only), "CIPHERTEXT_ONLY");
 
     // Calculate the expected HMAC of the ciphertext
     unsigned char expected_hmac[32];
     calculate_hmac(ciphertext_only, ciphertext_len - 64, key, key_len, expected_hmac);
-
-    //print_hex(hmac, 32, "HMAC");
-    //print_hex(expected_hmac, 32, "EXPECTED HMAC");
 
     // Confronto tra l'HMAC ricevuto e l'HMAC calcolato
     int result = 0;
@@ -1236,8 +879,6 @@ int extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsig
 }
 
 size_t decrypt_message(const unsigned char* ciphertext, size_t ciphertext_len, unsigned char* plaintext) {
-
-    //print_hex(ciphertext, ciphertext_len, "ENCRYPTED_TEXT");
 
     // Extract the IV from the ciphertext
     unsigned char iv[16];
@@ -1305,20 +946,14 @@ void updateBalance() {
 
     int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
 
-   // print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
-
     if (signatureValid) {
 
         unsigned char decr_message[BUFFER_SIZE];
         size_t decrypted_message_len;
-        printf("\t\t\t\t\t [*** MESSAGE SIGNED CORRECTLY ***]\n\n\n", mySelf->username);
+        printf("\t\t\t\t\t [*** MESSAGE SIGNED CORRECTLY ***]\n\n\n");
 
         // Decrypt the message
         decrypted_message_len = decrypt_message(rec, rec_l, decr_message);
-
-        // Print the decrypted message
-        //printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decr_message);
-        //printf("Decrypted Message Len: %d\n", (int)decrypted_message_len);
 
         float newBalance = atof(decr_message);
 
@@ -1351,6 +986,8 @@ void readFilesInDirectory(const char *directoryPath) {
         return;
     }
 
+    printf("-------------------------------------------------\n");
+    printf("| Transaction ID | Account Number | Amount | Date       |\n");
     // Leggi i file nella directory
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_REG) {  // Verifica se l'elemento è un file regolare
@@ -1365,20 +1002,18 @@ void readFilesInDirectory(const char *directoryPath) {
                 //snprintf(pathInfo, sizeof(pathInfo), "../client/registered/%s/info.txt", mySelf->username);
                 unsigned char *buffer = decryptFile(filePath);
 
-                printf("Contenuto del file %s:\n", buffer);
-
                 Transaction t = createTransactionFromString(buffer);
-                // Stampa i valori della transazione
-                printf("Transaction ID: %d\n", t.transaction_id);
-                printf("Account Number: %s\n", t.account_number);
-                printf("Amount: %.2f\n", t.amount);
-                printf("Timestamp: %ld\n", t.timestamp);
 
 
-                printf("\n");
+                printf("| %14d | %14s | %8.2f | ", t.transaction_id, t.account_number);
+                printf("%04d-%02d-%02d |\n",
+                       localtime(&t.timestamp)->tm_year + 1900,
+                       localtime(&t.timestamp)->tm_mon + 1,
+                       localtime(&t.timestamp)->tm_mday);
             }
         }
     }
+    printf("-------------------------------------------------\n");
 
     // Chiudi la directory
     closedir(dir);
@@ -1584,8 +1219,6 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
 
         numTransaction++;
 
-        printf("Transaction String: %s\n", transaction_string);
-
         unsigned char pathTransaction[BUFFER_SIZE];
         snprintf(pathTransaction, sizeof(pathTransaction), "../client/registered/%s/transactions/%d.txt", mySelf->username, t.transaction_id);
 
@@ -1593,52 +1226,13 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
 
         unsigned char* buffer = decryptFile(pathTransaction);
 
-        printf("\n\nTransaction: %s", buffer);
-
-        printf("\t\t\t\t\t [*** TRANSACTION SAVED SUCCESSFULLY ***]\n\n\n", mySelf->username);
+        printf("\t\t\t\t\t [*** TRANSACTION SAVED SUCCESSFULLY ***]\n\n\n");
         return 1;
 
     } else {
-        printf("\t\t\t\t\t [*** TRANSACTION DECLINED ***]\n\n\n", mySelf->username);
+        printf("\t\t\t\t\t [*** TRANSACTION DECLINED ***]\n\n\n");
         return -1;
     }
-}
-
-void sendPublicKey(int socket, EVP_PKEY* publicKey) {
-
-
-    // Ottieni la dimensione del buffer necessario per la serializzazione
-    int bufferSize = i2d_PUBKEY(publicKey, NULL);
-    if (bufferSize < 0) {
-        perror("Failed to get buffer size for public key");
-        return;
-    }
-
-    // Alloca il buffer per la serializzazione
-    unsigned char* buffer = (unsigned char*)malloc(bufferSize);
-    if (buffer == NULL) {
-        perror("Failed to allocate memory for public key serialization");
-        return;
-    }
-
-    // Serializza la chiave pubblica nel buffer
-    unsigned char* bufferPtr = buffer;
-    int result = i2d_PUBKEY(publicKey, &bufferPtr);
-    if (result < 0) {
-        perror("Failed to serialize public key");
-        free(buffer);
-        return;
-    }
-
-    // Invia i dati della chiave pubblica sul socket
-    result = send(socket, buffer, bufferSize, 0);
-    if (result < 0) {
-        perror("Failed to send public key");
-        free(buffer);
-        return;
-    }
-
-    free(buffer);
 }
 
 
@@ -1687,26 +1281,15 @@ int deposit(char *amount) {
             fprintf(stderr, "Failed to sign the message\n");
             return 1;
         }
-        //print_hex(signature, signature_length, "FIRMA");
 
         send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_length);
 
 
-        printf("\n\nSaldo inviato al server, grazie\n\n");
-
-
-
-
-
-
-
-
-
-
-
-
+        printf("\t\t\t\t\t [*** BALANCE REQUEST SENT TO THE SERVER, THANK YOU ***]\n\n\n");
+        return 1;
     } else {
-        printf("\n\nImport errato, riprovare\n\n");
+        printf("\t\t\t\t\t [*** INVALID IMPORT, TRY AGAIN ***]\n\n\n");
+        return -1;
     }
 }
 
@@ -1733,21 +1316,21 @@ int sendMoney(char* message) {
     }
 
     if (name == NULL || amount == NULL) {
-        printf("\nParametri non validi, riprovare!\n");
+        printf("\t\t\t\t\t [*** PARAMETERS NOT VALID, TRY AGAIN ***]\n\n\n");
         return -1;
     }
 
     int result = isFormatValid(amount);
 
     if (result != 1) {
-        printf("\nImporto non valido, riprovare\n");
+        printf("\t\t\t\t\t [*** INVALID AMOUNT ***]\n\n\n");
         return -1;
     }
 
     int amountOfMoney = atoi(amount);
 
     if (amountOfMoney > mySelf->balance) {
-        printf("\n\nSaldo insufficiente, ricaricare.\n\n");
+        printf("\t\t\t\t\t [*** CREDIT INSUFFICIENT, TRY AGAIN ***]\n\n\n");
         return -1;
     }
 
@@ -1786,7 +1369,6 @@ int sendMoney(char* message) {
         fprintf(stderr, "Failed to sign the message\n");
         return 1;
     }
-    //print_hex(signature, signature_length, "FIRMA");
 
     send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_length);
 
@@ -1802,14 +1384,12 @@ int sendMoney(char* message) {
 
     int signatureValid = receive_signed_message(server_sock, &rec, &rec_l, &rec_s, &rec_s_l);
     int r = 0;
-    //print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
 
     if (signatureValid) {
         r = saveTransaction(rec, rec_l, message);
 
         if (r == 1) {
             updateBalance();
-            //printAllTransactions(&mySelf->transaction_table);
         }
     }
 
@@ -1831,7 +1411,7 @@ void initializePaths() {
     snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
     snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
 
-    mySelf->pubKey = readPublicKeyFromPEM(pathPubK);
+    mySelf->pubKey = (EVP_PKEY **) readPublicKeyFromPEM(pathPubK);
 }
 
 int showBalance() {
@@ -1850,7 +1430,7 @@ int login_executor(char* arg) {
 
     if (checkExistingUser(username, password) == 1) {
         system("clear");  // For Unix/Linux
-        printf("\t\t\t\t\t [*** LOGGED CORRECTLY, WELCOME %S ***]\n\n\n", mySelf->username);
+        printf("\t\t\t\t\t [*** LOGGED CORRECTLY, WELCOME %s ***]\n\n\n", mySelf->username);
         printf("\t\t\t\t\t*****************************\n");
         printf("\t\t\t\t\t*       Informazioni        *\n");
         printf("\t\t\t\t\t*****************************\n");
@@ -1868,9 +1448,9 @@ int login_executor(char* arg) {
     return -1;
 }
 
-int diffieHellman() {
+void diffieHellman() {
 
-    printf("\t\t\t\t\t [*** DIFFIE-HELLMAN EXCHANGE STARTED ***]\n\n\n", mySelf->username);
+    printf("\t\t\t\t\t [*** DIFFIE-HELLMAN EXCHANGE STARTED ***]\n\n\n");
 
     unsigned char* diffieMessage = "2Diffie";
     sendMessage(server_sock, diffieMessage, strlen(diffieMessage));
@@ -1901,7 +1481,7 @@ int diffieHellman() {
         handle_error("Failed to send public key to server");
     }
 
-    printf("\t\t\t\t\t [*** PUBLIC KEY SENT ***]\n\n\n", mySelf->username);
+    printf("\t\t\t\t\t [*** PUBLIC KEY SENT ***]\n\n\n");
 
     // Receive the server's public key (server_pub_key)
 
@@ -1911,7 +1491,7 @@ int diffieHellman() {
         handle_error("Failed to receive public key from server");
     }
 
-    printf("\t\t\t\t\t [*** SERVER PUBLIC KEY RECEIVED ***]\n\n\n", mySelf->username);
+    printf("\t\t\t\t\t [*** SERVER PUBLIC KEY RECEIVED ***]\n\n\n");
 
     // Create a BIGNUM from the received public key data
     BIGNUM* server_pub_key = BN_bin2bn(server_pub_key_data, server_received_len, NULL);
@@ -1934,8 +1514,6 @@ int diffieHellman() {
 
     // Use the shared secret for further communication
 
-    print_hex(shared_secret, shared_secret_len, "SHARED SECRET");
-
     // Buffer to hold the encrypted message
     unsigned char encrypted_message[BUFFER_SIZE];
 
@@ -1947,14 +1525,11 @@ int diffieHellman() {
 
     // Decrypt the message
     decrypted_message_len = decrypt_message(encrypted_message, encrypted_message_len, decrypted_message);
-
-    // Print the decrypted message
-    //printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
-
 }
 
 
 int verifySelfSignedCertificate(const char* certFile) {
+
     // Load the self-signed certificate from file
     FILE* fp = fopen(certFile, "r");
     if (fp == NULL) {
@@ -2112,6 +1687,7 @@ void startEngine() {
         perror("Errore nell'allocazione di PeerInfo");
         return;
     }
+
     // Inizializza la tabella hash delle transazioni
     mySelf->transaction_table.transactions = malloc(MAX_TRANSACTIONS * sizeof(Transaction));
     mySelf->transaction_table.transaction_count = 0;
@@ -2137,16 +1713,17 @@ void startEngine() {
         return;
     }
 
-    server->serv_addr = serv_addr;
     server->server_sock = server_sock;
 
     /* Verify the identity of the server */
     verifySelfSignedCertificate("../server/certificate.pem");
 
-    // Verifico che il peer sia registrato
-    char answer;
+
     printf("\n\n   ****************************************** WELCOME TO SECURE BANK  ******************************************\n\n");
 
+    char answer;
+
+    /* Cicla fino a quando non viene inserito un carattere compreso tra Y/y e N/n */
     do {
         printf("Are you already registered? [Y/n]\n> ");
         scanf(" %c", &answer);
@@ -2160,11 +1737,12 @@ void startEngine() {
 
     } while (answer != 'Y' && answer != 'N');
 
-
+    /* Se la risposta è Y, devo loggare l'utente */
     if (answer == 'Y' || answer == 'y') {
 
         int loginResult = -1;
 
+        /* Finchè l'utente non inserisce i suoi dati giusti non va avanti */
         while (loginResult == -1) {
             printf("\nPlease, Sign In.\n");
             char username[50];
@@ -2228,6 +1806,7 @@ void startEngine() {
 
     unsigned char pathInfo[BUFFER_SIZE];
     unsigned char *folderpath = "../client/registered";
+
     if (registered) {
         //salva shared secret su file (non è corretto in quanto andrebbe salvato su un keystore), il punto è che ogni volta
         // che si esegue il client lo shared secret cambia quindi non saremo più in grado di leggere i file cifrati.
@@ -2252,7 +1831,6 @@ void startEngine() {
         snprintf(pathKey, sizeof(pathKey), "%s/%s/%s", folderpath, mySelf->username, "key.txt");
         snprintf(pathInfo, sizeof(pathInfo), "%s/%s/%s", folderpath, mySelf->username, "info.txt");
         loadSharedSecretFromFile(keyStore, pathKey);
-        print_hex(keyStore, strlen(keyStore), "KEYSTORE");
 
         // Carica info utente
         decryptFile(pathInfo);
@@ -2294,7 +1872,7 @@ int process_command(const char* cmd, char* arg) {
     return 1;
 }
 
-int _handle_cmd() {
+int handle_cmd() {
 
     char* buf = NULL;
     size_t buf_len = 0;
@@ -2309,7 +1887,7 @@ int _handle_cmd() {
         return -1;
     }
 
-    if (_parse_command(buf, buf_len, &cmd, &arg) == -1) {
+    if (parse_command(buf, buf_len, &cmd, &arg) == -1) {
         /* line contains only '!' */
         printf("Errore: comando non specificato\n");
         free(buf);
@@ -2348,7 +1926,7 @@ int main() {
             if (FD_ISSET(i, &read_fds)) {
 
                 if (i == STDIN_FILENO) {
-                    _handle_cmd();
+                    handle_cmd();
                 }
             }
         }
