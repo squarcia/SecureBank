@@ -1,8 +1,7 @@
 #define PORT	 8080
-#define COMMANDS 6
+#define COMMANDS 4
 #define MAX_TRANSACTIONS 1000
 #define COMMAND_PREFIX '!'
-#define BUFFER_SIZE 1024
 #define BUFFER_SIZE 1024
 #define MAX_KEY_SIZE 2048
 #define HMAC_SIZE 32
@@ -51,10 +50,10 @@ typedef struct {
 
 typedef struct {
     int port;
-    char nome[1024];
-    char cognome[1024];
-    char username[1024];
-    char password[1024];
+    char nome[BUFFER_SIZE];
+    char cognome[BUFFER_SIZE];
+    char username[BUFFER_SIZE];
+    char password[BUFFER_SIZE];
     float balance;
     EVP_PKEY **pubKey;
     TransactionTable transaction_table;
@@ -78,8 +77,8 @@ int crypted = 0;
 
 EVP_PKEY* serverPublicKey = NULL;
 
-const unsigned char pathPrivK[1024];
-const unsigned char pathPubK[1024];
+const unsigned char pathPrivK[BUFFER_SIZE];
+const unsigned char pathPubK[BUFFER_SIZE];
 
 PeerInfo *mySelf;
 
@@ -87,9 +86,9 @@ int registered = 0;
 
 int numTransaction = 0;
 
-unsigned char keyStore[1024];
+unsigned char keyStore[BUFFER_SIZE];
 
-const char* valid_cmds[] = {"sendMoney", "showBalance", "stop"};
+const char* valid_cmds[] = {"sendMoney", "showBalance", "history", "stop"};
 
 const char* help_msg =
         "\n\n   ****************************************** HOME ******************************************\n\n"
@@ -243,7 +242,7 @@ void printPrivateKey(const EVP_PKEY* privateKey) {
         return;
     }
 
-    char buffer[1024];
+    char buffer[BUFFER_SIZE];
     int bytesRead;
     while ((bytesRead = BIO_gets(bio, buffer, sizeof(buffer))) > 0) {
         printf("%s", buffer);
@@ -404,7 +403,7 @@ void encryptFile(unsigned char* ciphertext_file, char *string) {
 
     // Buffer per i dati di input e output
     //unsigned char in_buf[] = "CIAO";
-    unsigned char out_buf[1024 + EVP_MAX_BLOCK_LENGTH];
+    unsigned char out_buf[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
 
     int num_bytes_written;
 
@@ -461,8 +460,8 @@ unsigned char* decryptFile(const char* ciphertext_file) {
     }
 
     // Buffer per i dati di input e output
-    unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
-    unsigned char out_buf[1024];
+    unsigned char in_buf[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
+    unsigned char out_buf[BUFFER_SIZE];
     unsigned char* decrypted_data = NULL;
     size_t decrypted_size = 0;
 
@@ -1020,10 +1019,10 @@ int checkExistingUser(const char* username, const char* pwd) {
     const char* directoryPath = "../client/registered"; // Specifica il percorso della cartella
     const char* searchString = username; // Stringa da confrontare con i nomi dei file
 
-    char path[1024];
+    char path[BUFFER_SIZE];
     snprintf(path, sizeof(path), "%s/%s/info.txt", directoryPath, username);
 
-    unsigned char pathKey[1024];
+    unsigned char pathKey[BUFFER_SIZE];
     snprintf(pathKey, sizeof(pathKey), "%s/%s/key.txt", directoryPath, username);
     printf("PathKey: %s", pathKey);
     loadSharedSecretFromFile(keyStore, pathKey);
@@ -1269,7 +1268,7 @@ void updateBalance() {
     size_t msg_len = strlen(msg);
 
     // Buffer to hold the encrypted message
-    unsigned char en_message[1024];
+    unsigned char en_message[BUFFER_SIZE];
     size_t en_message_len;
 
     // Encrypt the message
@@ -1290,7 +1289,7 @@ void updateBalance() {
 
     if (signatureValid) {
 
-        unsigned char decr_message[1024];
+        unsigned char decr_message[BUFFER_SIZE];
         size_t decrypted_message_len;
         printf("\t\t\t\t\t [*** MESSAGE SIGNED CORRECTLY ***]\n\n\n", mySelf->username);
 
@@ -1365,19 +1364,20 @@ void readFilesInDirectory(const char *directoryPath) {
     closedir(dir);
 }
 
-int stop_executor() {
-
-    unsigned char directoryPath[1024];
+int history() {
+    unsigned char directoryPath[BUFFER_SIZE];
     sprintf(directoryPath, "../client/registered/%s/transactions", mySelf->username);
 
     readFilesInDirectory(directoryPath);
-    /*
+}
 
-    unsigned char pathInfo[1024];
+int stop_executor() {
+
+    unsigned char pathInfo[BUFFER_SIZE];
     // Salva info utente
     snprintf(pathInfo, sizeof(pathInfo), "../client/registered/%s/info.txt", mySelf->username);
     // Cifratura
-    char* formattedString = (char*)malloc(5 * 1024 * sizeof(char)); // Assumendo una lunghezza massima di 1024 caratteri per ogni campo
+    char* formattedString = (char*)malloc(5 * BUFFER_SIZE * sizeof(char)); // Assumendo una lunghezza massima di BUFFER_SIZE caratteri per ogni campo
     sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
     printf("Form: %s", formattedString);
     encryptFile(pathInfo, formattedString);
@@ -1389,7 +1389,6 @@ int stop_executor() {
     close(server_sock);
 
     exit(1);
-     */
 }
 
 
@@ -1523,8 +1522,8 @@ int sign_message(const unsigned char* message, size_t message_length, const char
 
 int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction) {
 
-    unsigned char decrypted_message[1024];
-    unsigned char transactioEsito[1024];
+    unsigned char decrypted_message[BUFFER_SIZE];
+    unsigned char transactioEsito[BUFFER_SIZE];
     size_t decrypted_message_len;
 
     decrypted_message_len = decrypt_message(received, rec_len, decrypted_message);
@@ -1555,8 +1554,6 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
         Transaction t = createTransaction(numTransaction, name, amountOfMoney);
         addTransaction(t);
 
-        numTransaction++;
-
         // Creazione della stringa con sprintf e delimitatore ":"
         char transaction_string[256];
         sprintf(transaction_string, "%d:%s:%.2f:%ld",
@@ -1569,7 +1566,7 @@ int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* tra
 
         printf("Transaction String: %s\n", transaction_string);
 
-        unsigned char pathTransaction[1024];
+        unsigned char pathTransaction[BUFFER_SIZE];
         snprintf(pathTransaction, sizeof(pathTransaction), "../client/registered/%s/transactions/%d.txt", mySelf->username, t.transaction_id);
 
         encryptFile(pathTransaction, transaction_string);
@@ -1633,7 +1630,7 @@ int sendMoney(char* message) {
     size_t msg_len = strlen(msg);
 
     // Buffer to hold the encrypted message
-    unsigned char en_message[1024];
+    unsigned char en_message[BUFFER_SIZE];
     size_t en_message_len;
 
     // Encrypt the message
@@ -1647,7 +1644,7 @@ int sendMoney(char* message) {
     size_t message_len = strlen(message);
 
     // Buffer to hold the encrypted message
-    unsigned char encrypted_message[1024];
+    unsigned char encrypted_message[BUFFER_SIZE];
     size_t encrypted_message_len;
 
     // Encrypt the message
@@ -1811,10 +1808,10 @@ int diffieHellman() {
     print_hex(shared_secret, shared_secret_len, "SHARED SECRET");
 
     // Buffer to hold the encrypted message
-    unsigned char encrypted_message[1024];
+    unsigned char encrypted_message[BUFFER_SIZE];
 
     // Buffer to hold the decrypted message
-    unsigned char decrypted_message[1024];
+    unsigned char decrypted_message[BUFFER_SIZE];
     size_t decrypted_message_len;
 
     size_t encrypted_message_len = recv(server_sock, encrypted_message, sizeof(encrypted_message), 0);
@@ -1926,7 +1923,7 @@ void sendEncryptedPublicKey(int socket, EVP_PKEY* publicKey) {
     }
 
     // Encrypt the public key
-    unsigned char encryptedPublicKey[1024];  // Adjust the buffer size as needed
+    unsigned char encryptedPublicKey[BUFFER_SIZE];  // Adjust the buffer size as needed
     size_t encryptedSize = encrypt_message(publicKeyBuffer, publicKeySize, encryptedPublicKey);
 
     // Send the encrypted public key over the socket
@@ -1946,7 +1943,7 @@ void sendPubKey() {
     size_t msg_len = strlen(msg);
 
     // Buffer to hold the encrypted message
-    unsigned char en_message[1024];
+    unsigned char en_message[BUFFER_SIZE];
     size_t en_message_len;
 
     // Encrypt the message
@@ -2096,13 +2093,13 @@ void startEngine() {
 
     diffieHellman();
 
-    unsigned char pathInfo[1024];
+    unsigned char pathInfo[BUFFER_SIZE];
     unsigned char *folderpath = "../client/registered";
     if (registered) {
         //salva shared secret su file (non è corretto in quanto andrebbe salvato su un keystore), il punto è che ogni volta
         // che si esegue il client lo shared secret cambia quindi non saremo più in grado di leggere i file cifrati.
         //È sbagliata come operazione ma per scopi esemplificativi va bene in quanto interessa la comunicazione banca-utente
-        unsigned char pathKey[1024];
+        unsigned char pathKey[BUFFER_SIZE];
 
         snprintf(pathKey, sizeof(pathKey), "%s/%s/%s", folderpath, mySelf->username, "key.txt");
         memcpy(keyStore, shared_secret, strlen(shared_secret));
@@ -2111,14 +2108,14 @@ void startEngine() {
         // Salva info utente
         snprintf(pathInfo, sizeof(pathInfo), "%s/%s/%s", folderpath, mySelf->username, "info.txt");
         // Cifratura
-        char* formattedString = (char*)malloc(5 * 1024 * sizeof(char)); // Assumendo una lunghezza massima di 1024 caratteri per ogni campo
+        char* formattedString = (char*)malloc(5 * BUFFER_SIZE * sizeof(char)); // Assumendo una lunghezza massima di BUFFER_SIZE caratteri per ogni campo
         sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
         printf("Formatted String: %s", formattedString);
         encryptFile(pathInfo, formattedString);
 
     } else {
         // Carica chiave
-        unsigned char pathKey[1024];
+        unsigned char pathKey[BUFFER_SIZE];
         snprintf(pathKey, sizeof(pathKey), "%s/%s/%s", folderpath, mySelf->username, "key.txt");
         snprintf(pathInfo, sizeof(pathInfo), "%s/%s/%s", folderpath, mySelf->username, "info.txt");
         loadSharedSecretFromFile(keyStore, pathKey);
@@ -2129,7 +2126,7 @@ void startEngine() {
     }
 
     // Set number of transactions
-    unsigned char pathTransactions[1024];
+    unsigned char pathTransactions[BUFFER_SIZE];
     snprintf(pathTransactions, sizeof(pathTransactions), "%s/%s/transactions", folderpath, mySelf->username);
     numTransaction = countFilesInDirectory(pathTransactions);
 
@@ -2139,6 +2136,7 @@ void startEngine() {
 cmd_executor executors[] = {
         sendMoney,
         showBalance,
+        history,
         stop_executor
 };
 
