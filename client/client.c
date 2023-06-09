@@ -364,19 +364,17 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
 }
 
 int isFormatValid(const char* input) {
-    printf("input: %s", input);
-    // Verifica la lunghezza della stringa
-    if (strlen(input) != 5)
-        return -1;
 
-    // Verifica i caratteri alle posizioni specifiche
-    if (!isdigit(input[0]) || !isdigit(input[1]) || input[2] != '.' || !isdigit(input[3]) || !isdigit(input[4]))
-        return -1;
+    size_t length = strlen(input);
+    for (size_t i = 0; i < length; i++) {
+        if (input[i] < '0' || input[i] > '9') {
+            return -1;
+        }
+    }
 
-    return 1;
+    float value = atof(input);
+    return value < 1000.0;
 }
-
-
 
 void generateRandomIV(unsigned char *iv, int iv_len) {
     if (RAND_bytes(iv, iv_len) != 1) {
@@ -1325,7 +1323,7 @@ void updateBalance() {
         float newBalance = atof(decr_message);
 
         mySelf->balance = newBalance;
-        printf("\t\t\t\t\t [*** NEW BALANCE: %f € ***]\n\n\n", mySelf->balance);
+        printf("\t\t\t\t\t [*** NEW BALANCE: %.2f € ***]\n\n\n", mySelf->balance);
     }
 
     //free(rec_s);
@@ -1734,6 +1732,18 @@ int sendMoney(char* message) {
         amount = strdup(token);
     }
 
+    if (name == NULL || amount == NULL) {
+        printf("\nParametri non validi, riprovare!\n");
+        return -1;
+    }
+
+    int result = isFormatValid(amount);
+
+    if (result != 1) {
+        printf("\nImporto non valido, riprovare\n");
+        return -1;
+    }
+
     int amountOfMoney = atoi(amount);
 
     if (amountOfMoney > mySelf->balance) {
@@ -1771,7 +1781,7 @@ int sendMoney(char* message) {
     size_t signature_length = 0;
 
     // Firma il messaggio
-    int result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
+    result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
     if (result != 0) {
         fprintf(stderr, "Failed to sign the message\n");
         return 1;
@@ -2295,6 +2305,7 @@ int _handle_cmd() {
     buf_len = getline(&buf, &buf_len, stdin);
 
     if (buf_len > 0 && buf[0] != COMMAND_PREFIX) {
+        printf("Errore: i comandi devono iniziare con !\n");
         free(buf);
         return -1;
     }
