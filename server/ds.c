@@ -1667,7 +1667,7 @@ int main() {
 
 
                     } else if (atoi(&destination) == 8) {
-                        printf("DATI UTENTE\n\n");
+                        printf("Saldo\n\n");
                         // Ricevi il messaggio firmato
                         unsigned char* rec;
                         size_t rec_l;
@@ -1680,17 +1680,10 @@ int main() {
 
                         print_hex(rec_s, rec_s_l, "SIGNATURE RESPONSE");
                         printf("DOPO FIRMA: %d", signatureValid);
-                        /*
+
                         if (signatureValid) {
 
                             Entry* foundEntryByUsername = findEntryByKey(peerList, sd);
-
-                            if (foundEntryByUsername == NULL) {
-                                printf("PEER NULLO");
-
-                                // Ne creo uno nuovo e lo aggiungo alla tabella hash
-                            }
-                            int count = 0;
 
                             unsigned char decrypted_message[1024];
                             size_t decrypted_message_len;
@@ -1702,40 +1695,9 @@ int main() {
                             // Print the decrypted message
                             printf("Decrypted Message: %.*s\n", (int)decrypted_message_len, decrypted_message);
 
-                            // Utilizza strtok per ottenere il primo token
-                            token = strtok(decrypted_message, ":");
-
-                            while (token != NULL) {
-                                if (count > 0) {
-
-                                    // Ignora il primo token
-                                    switch (count) {
-                                        case 1:
-                                            strcpy(foundEntryByUsername->value->nome, token);
-                                            break;
-                                        case 2:
-                                            strcpy(foundEntryByUsername->value->cognome, token);
-                                            break;
-                                        case 3:
-                                            strcpy(foundEntryByUsername->value->username, token);
-                                            break;
-                                        case 4:
-                                            strcpy(foundEntryByUsername->value->password, token);
-                                            break;
-                                        case 5:
-                                            foundEntryByUsername->value->balance = atof(token);
-                                            break;
-                                    }
-                                }
-
-                                // Passa al token successivo
-                                token = strtok(NULL, ":");
-                                count++;
-                            }
-
-                            insertEntry(peerList, &foundEntryByUsername);
+                            float amount = atof(decrypted_message);
+                            foundEntryByUsername->value->balance += amount;
                         }
-                        */
                     } else if (atoi(&destination) == 9) {
 
                         printf("MESSAGGIO FIRMATO\n");

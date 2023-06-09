@@ -1,5 +1,5 @@
 #define PORT	 8080
-#define COMMANDS 4
+#define COMMANDS 5
 #define MAX_TRANSACTIONS 1000
 #define COMMAND_PREFIX '!'
 #define BUFFER_SIZE 1024
@@ -88,14 +88,15 @@ int numTransaction = 0;
 
 unsigned char keyStore[BUFFER_SIZE];
 
-const char* valid_cmds[] = {"sendMoney", "showBalance", "history", "stop"};
+const char* valid_cmds[] = {"sendMoney", "showBalance", "deposit","history", "stop"};
 
 const char* help_msg =
         "\n\n   ****************************************** HOME ******************************************\n\n"
-        "\t!sendMoney           <dest> <amount>     --> invia il denaro all'utente dest di amount con la virgola\n"
+        "\t!sendMoney           <DEST> <AMOUNT>     --> invia il denaro all'utente dest di amount con la virgola\n"
         "\t!showBalance                             --> aggiunge una tupla al register corrente\n"
+        "\t!deposit             <AMOUNT>            --> ricarica il conto\n"
+        "\t!history                                 --> visualizza la storia passata delle transazioni\n"
         "\t!stop                                    --> disconnette il peer dal network\n\n\n";
-
 
 
 void addTransaction(Transaction transaction) {
@@ -362,6 +363,20 @@ EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_
     return keypair;
 }
 
+int isFormatValid(const char* input) {
+    printf("input: %s", input);
+    // Verifica la lunghezza della stringa
+    if (strlen(input) != 5)
+        return -1;
+
+    // Verifica i caratteri alle posizioni specifiche
+    if (!isdigit(input[0]) || !isdigit(input[1]) || input[2] != '.' || !isdigit(input[3]) || !isdigit(input[4]))
+        return -1;
+
+    return 1;
+}
+
+
 
 void generateRandomIV(unsigned char *iv, int iv_len) {
     if (RAND_bytes(iv, iv_len) != 1) {
@@ -537,11 +552,11 @@ void saveSharedSecretToFile(const unsigned char* keyStore, size_t sharedSecretSi
     fclose(file);
 }
 
-void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
+int loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
     FILE* file = fopen(keyPath, "rb");
     if (file == NULL) {
         fprintf(stderr, "Impossibile aprire il file per la lettura\n");
-        exit(1);
+        return -1;
     }
 
     size_t bytesRead = fread(keyStore, 1, 256, file);
@@ -1025,7 +1040,14 @@ int checkExistingUser(const char* username, const char* pwd) {
     unsigned char pathKey[BUFFER_SIZE];
     snprintf(pathKey, sizeof(pathKey), "%s/%s/key.txt", directoryPath, username);
     printf("PathKey: %s", pathKey);
-    loadSharedSecretFromFile(keyStore, pathKey);
+    int result = loadSharedSecretFromFile(keyStore, pathKey);
+
+    if (result == -1) {
+        printf("Username o password errati riprovare...");
+        return -1;
+    }
+
+
     unsigned char *buffer;
     buffer = decryptFile(path);
 
@@ -1622,8 +1644,102 @@ void sendPublicKey(int socket, EVP_PKEY* publicKey) {
 }
 
 
+int deposit(char *amount) {
+
+    int importValid = isFormatValid(amount);
+
+    if (importValid == 1) {
+        float amountOfMoney = 0;
+        amountOfMoney = atof(amount);
+        mySelf->balance += amountOfMoney;
+
+
+        // Message to be sent
+        unsigned char* msg = "8";
+        size_t msg_len = strlen(msg);
+
+        // Buffer to hold the encrypted message
+        unsigned char en_message[BUFFER_SIZE];
+        size_t en_message_len;
+
+        // Encrypt the message
+        en_message_len = encrypt_message(msg, msg_len, en_message);
+
+        sendMessage(server_sock, en_message, en_message_len);
+
+        sleep(2);
+
+        // Message to be sent
+        size_t message_len = strlen(amount);
+
+        // Buffer to hold the encrypted message
+        unsigned char encrypted_message[BUFFER_SIZE];
+        size_t encrypted_message_len;
+
+        // Encrypt the message
+        encrypted_message_len = encrypt_message((const unsigned char*)amount, message_len, encrypted_message);
+
+        // Variabili per la firma
+        unsigned char* signature = NULL;
+        size_t signature_length = 0;
+
+        // Firma il messaggio
+        int result = sign_message(encrypted_message, encrypted_message_len, pathPrivK, &signature, &signature_length);
+        if (result != 0) {
+            fprintf(stderr, "Failed to sign the message\n");
+            return 1;
+        }
+        //print_hex(signature, signature_length, "FIRMA");
+
+        send_signed_message(server_sock, encrypted_message, encrypted_message_len, signature, signature_length);
+
+
+        printf("\n\nSaldo inviato al server, grazie\n\n");
+
+
+
+
+
+
+
+
+
+
+
+
+    } else {
+        printf("\n\nImport errato, riprovare\n\n");
+    }
+}
+
+
 // Funzione per inviare soldi a un'altra persona
 int sendMoney(char* message) {
+
+    // Verifico che il saldo sia sufficiente
+    char* name = NULL;
+    char* amount = NULL;
+    unsigned char buffer[BUFFER_SIZE];
+    memcpy(buffer, message, strlen(message));
+
+    // Primo token
+    char* token = strtok(buffer, " ");
+    if (token != NULL) {
+        name = strdup(token);
+    }
+
+    // Secondo token
+    token = strtok(NULL, " ");
+    if (token != NULL) {
+        amount = strdup(token);
+    }
+
+    int amountOfMoney = atoi(amount);
+
+    if (amountOfMoney > mySelf->balance) {
+        printf("\n\nSaldo insufficiente, ricaricare.\n\n");
+        return -1;
+    }
 
     // Message to be sent
     unsigned char* msg = "9";
@@ -1722,7 +1838,7 @@ int login_executor(char* arg) {
     char *username = strtok(arg, delimiter);
     char *password = strtok(NULL, delimiter);
 
-    if (checkExistingUser(username, password)) {
+    if (checkExistingUser(username, password) == 1) {
         system("clear");  // For Unix/Linux
         printf("\t\t\t\t\t [*** LOGGED CORRECTLY, WELCOME %S ***]\n\n\n", mySelf->username);
         printf("\t\t\t\t\t*****************************\n");
@@ -1736,7 +1852,10 @@ int login_executor(char* arg) {
         sleep(5);
         system("clear");  // For Unix/Linux
         initializePaths();
+        return 1;
     }
+    printf("QUA\n\n\n");
+    return -1;
 }
 
 int diffieHellman() {
@@ -2033,25 +2152,29 @@ void startEngine() {
 
 
     if (answer == 'Y' || answer == 'y') {
-        printf("\nPlease, Sign In.\n");
 
-        char username[50];
-        char password[50];
-        printf("\nUsername: \n> ");
-        scanf("%s", username);
+        int loginResult = -1;
 
-        printf("Password: \n>");
-        hideInput(); // Nascondi l'input dell'utente
-        scanf("%s", password);
-        showInput(); // Mostra di nuovo l'input dell'utente
+        while (loginResult == -1) {
+            printf("\nPlease, Sign In.\n");
+            char username[50];
+            char password[50];
+            printf("\nUsername: \n> ");
+            scanf("%s", username);
 
-        // Concatenazione di username e password con uno spazio
-        char credentials[100];
-        strcpy(credentials, username);
-        strcat(credentials, " ");
-        strcat(credentials, password);
+            printf("Password: \n>");
+            hideInput(); // Nascondi l'input dell'utente
+            scanf("%s", password);
+            showInput(); // Mostra di nuovo l'input dell'utente
 
-        login_executor(credentials);
+            // Concatenazione di username e password con uno spazio
+            char credentials[100];
+            strcpy(credentials, username);
+            strcat(credentials, " ");
+            strcat(credentials, password);
+
+           loginResult = login_executor(credentials);
+        }
 
     } else if (answer == 'N' || answer == 'n') {
         printf("Please Sign Up.\n");
@@ -2136,6 +2259,7 @@ void startEngine() {
 cmd_executor executors[] = {
         sendMoney,
         showBalance,
+        deposit,
         history,
         stop_executor
 };
