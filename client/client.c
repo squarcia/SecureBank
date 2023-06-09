@@ -2305,7 +2305,6 @@ int _handle_cmd() {
     buf_len = getline(&buf, &buf_len, stdin);
 
     if (buf_len > 0 && buf[0] != COMMAND_PREFIX) {
-        printf("Errore: i comandi devono iniziare con !\n");
         free(buf);
         return -1;
     }

@@ -30,7 +30,6 @@ int crypted = 0;
 
 typedef struct peerInfo {
     int socket;
-    char dataRemota[1024];
     char nome[1024];
     char cognome[1024];
     char username[1024];
@@ -321,7 +320,7 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
     fclose(cipher_file);
 }
 
-unsigned char* decryptFile(const char* ciphertext_file, unsigned char *keyStore) {
+unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore) {
     // Apri il file cifrato
     FILE* cipher_file = fopen(ciphertext_file, "rb");
     if (!cipher_file) {
@@ -349,8 +348,8 @@ unsigned char* decryptFile(const char* ciphertext_file, unsigned char *keyStore)
     }
 
     // Buffer per i dati di input e output
-    unsigned char in_buf[1024 + EVP_MAX_BLOCK_LENGTH];
-    unsigned char out_buf[1024];
+    unsigned char in_buf[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
+    unsigned char out_buf[BUFFER_SIZE];
     unsigned char* decrypted_data = NULL;
     size_t decrypted_size = 0;
 
@@ -1366,16 +1365,32 @@ void readPeerInfoFromFolders(const char* parentFolder) {
             exit(1);
         }
 
-        int balance = 0;
+        unsigned char* balance;
 
-        if (sscanf((char*)informationsUser, "%[^:]:%[^:]:%[^:]:%[^:]:%f",
-                   peerInfo->nome, peerInfo->cognome, peerInfo->username,
-                   peerInfo->password, &balance) != 5) {
-            // Errore nella lettura dei dati, gestisci l'errore adeguatamente
-            perror("Failed to read data from decrypted information");
+        char* token = strtok((char*)informationsUser, ":");
+        memcpy(peerInfo->nome, token, strlen(token));
+
+        token = strtok(NULL, ":");
+        memcpy(peerInfo->cognome, token, strlen(token));
+
+        token = strtok(NULL, ":");
+        memcpy(peerInfo->username, token, strlen(token));
+
+        token = strtok(NULL, ":");
+        memcpy(peerInfo->password, token, strlen(token));
+
+        token = strtok(NULL, ":");
+
+        int whole;
+        int decimal;
+
+        if (sscanf(token, "%d.%2d", &whole, &decimal) != 2) {
+            printf("Errore: Formato non valido.\n");
+            return;
         }
 
-        printf("\nUsername: %s", peerInfo->username);
+        float number = (float)whole + (float)decimal / 100.0;
+        peerInfo->balance = number;
 
         FILE* publicKeyFile = fopen(publicKeyFilePath, "r");
 
@@ -1389,9 +1404,8 @@ void readPeerInfoFromFolders(const char* parentFolder) {
         peerInfo->pubKey = pubKey;
 
         // Stampa dei dati del PeerInfo
-        printf("PeerInfo: %s\n", entry->d_name);
+        printf("\nPeerInfo: %s\n", entry->d_name);
         printf("Socket: %d\n", peerInfo->socket);
-        printf("Data Remota: %s\n", peerInfo->dataRemota);
         printf("Nome: %s\n", peerInfo->nome);
         printf("Cognome: %s\n", peerInfo->cognome);
         printf("Username: %s\n", peerInfo->username);
@@ -1787,7 +1801,6 @@ int main() {
                         if (foundEntryByUsername != NULL) {
                             printf("Elemento trovato:\n");
                             printf("Socket: %d\n", foundEntryByUsername->value->socket);
-                            printf("Dati remoti: %s\n", foundEntryByUsername->value->dataRemota);
                             foundEntryByUsername->value->pubKey = serverPublicKey;
                             printEvpKey(foundEntryByUsername->value->pubKey);
                         } else {
