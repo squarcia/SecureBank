@@ -587,8 +587,6 @@ int register_executor() {
         memcpy(mySelf->password, password, strlen(password) + 1);
         mySelf->balance = 0;
 
-        /* Scrivere il testo cifrato su file */
-        /* Per ora lo scrivamo senza cifratura, DA MODIFICARE*/
         const char *directory = "../client/registered";
         const char *filename = username;
 
@@ -596,8 +594,6 @@ int register_executor() {
 
         snprintf(folderpath, sizeof(folderpath), "%s/%s", directory, filename);
         snprintf(transactionpath, sizeof(transactionpath), "%s/%s/transactions", directory, filename);
-
-        //printf("FOLDERPATH: %s\n", folderpath);
 
         int result = mkdir(folderpath, 0777);
 
@@ -622,17 +618,14 @@ int register_executor() {
             return -1;
         }
 
-        // Incrementa la dimensione per includere il carattere terminatore di stringa
         buffer_size++;
 
-        // Alloca il buffer dinamicamente
         char *buffer = (char *)malloc(buffer_size * sizeof(char));
         if (buffer == NULL){
             fprintf(stderr, "Errore durante l'allocazione del buffer.\n");
             return -1;
         }
 
-        // Scrivi la stringa formattata nel buffer
         result = snprintf(buffer, buffer_size, "%s:%s:%s:%s", nome, cognome, username, password);
         if (result < 0 || result >= buffer_size){
             fprintf(stderr, "Errore durante la scrittura nel buffer.\n");
@@ -646,29 +639,24 @@ int register_executor() {
             return -1;
         }
 
-        // Apri il file in modalità scrittura
         FILE *file = fopen(filepath, "w");
         if (file == NULL){
             fprintf(stderr, "Impossibile aprire il file %s.\n", filename);
             return -1;
         }
 
-        // Scrivi il testo sul file
         if (fputs(buffer, file) == EOF){
             fprintf(stderr, "Errore durante la scrittura sul file %s.\n", filename);
             fclose(file);
             return -1;
         }
 
-        // Chiudi il file
         fclose(file);
 
         printf("\t\t\t\t\t [*** USER REGISTERED CORRECTLY, INFORMATION SAVED! ***]\n");
 
         registered = 1;
     }
-
-    // Genero la mia coppia di chiavi private e pubbliche
 
     snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", folderpath, "private_key");
     snprintf(pathPubK, sizeof(pathPubK), "%s/%s", folderpath, "public_key");
@@ -1760,7 +1748,7 @@ void startEngine() {
             strcat(credentials, " ");
             strcat(credentials, password);
 
-           loginResult = login_executor(credentials);
+            loginResult = login_executor(credentials);
         }
 
     } else if (answer == 'N' || answer == 'n') {
