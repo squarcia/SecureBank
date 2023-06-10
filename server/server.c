@@ -1,33 +1,11 @@
 #include "server_protocol.h"
 
-const char* valid_cmds[] = {"help", "showpeers", "showneighbor", "close", "esc"};
+const char* valid_cmds[] = { "showUsers",  "esc"};
 
 const char* help_msg =
-        "\n\n****************************************** DS COVID ******************************************\n\n"
-        "               !help                  --> mostra il significato dei comandi e ciò che fanno\n"
-        "               !showpeers             --> mostra l’elenco dei peer connessi alla rete\n"
-        "               !showneighbor  <peer>  --> mostra i neighbor di un peer\n"
-        "               !close <peer>          --> chiude il register di un peer\n"
-        "               !esc                   --> termina il DS\n";
-
-
-const char* help_verbose_msg =
-        "\n\n\t=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=  HELP COMMAND SECTION =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=\n\n"
-        "\tSHOWPEERS:\t\t Mostra l'elenco completo dei peers connessi alla rete in modalità verbose\n\n"
-        "\tSHOWNEIGHBOR:\t\t Mostra i neighbor di un peer passato come parametro."
-        "\n\t\t\t\t Se non viene passato nessun parametro vengono mostrati"
-        "\n\t\t\t\t i neighbor di ogni peer. \n\n"
-        "\tCLOSE:\t\t\t provoca la chiusura del register del peer specificato come parametro.\n\n"
-        "\tESC:\t\t\t termina il DS. La terminazione del DS causa la terminazione"
-        "\n\t\t\t\t di tutti i peer."
-        "\n\t\t\t\t Opzionalmente, prima di chiudersi, i peer possono salvare"
-        "\n\t\t\t\t le loro informazioni su un file,"
-        "\n\t\t\t\t ricaricato nel momento in cui un peer torna a far parte del network.\n\n";
-
-int help_executor(char* arg) {
-    printf("%s", help_verbose_msg);
-    return 0;
-}
+        "\n\n****************************************** SECURE BANK ******************************************\n\n"
+        "               !showUsers             --> mostra l’elenco dei peer registrati alla banca\n"
+        "               !esc                   --> termina il server\n";
 
 Entry* createEntry(PeerInfo* value) {
     Entry* entry = (Entry*)malloc(sizeof(Entry));
@@ -909,7 +887,7 @@ int sign_message(const unsigned char* message, size_t message_length, const char
 
 int esc_executor(char* arg) {
 
-    printf("\n\n\n\t\t\t\t  [  DS SERVER IN CHIUSURA...  ]\n\n");
+    printf("\n\n\n\t\t\t\t  [  SERVER IN CHIUSURA...  ]\n\n");
 
     return 0;
 }
@@ -940,10 +918,13 @@ int parse_command(char* line, size_t line_len, char** cmd, char** arg){
     return 0;
 }
 
+int showUsers() {
+    printEntryList(peerList);
+}
+
 cmd_executor executors[] = {
-        help_executor,
-        close_executor,
-        esc_executor
+        showUsers,
+        close_executor
 };
 
 int process_command(const char* cmd, char* arg) {

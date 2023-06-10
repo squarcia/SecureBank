@@ -4,8 +4,7 @@
 
 
 /** Executors Functions **/
-int help_executor(char* arg);
-int esc_executor(char* arg);
+int showUsers();
 int close_executor(char* arg);
 
 /** Entry Functions **/

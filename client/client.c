@@ -1034,12 +1034,13 @@ int stop_executor() {
     // Cifratura
     char* formattedString = (char*)malloc(5 * BUFFER_SIZE * sizeof(char)); // Assumendo una lunghezza massima di BUFFER_SIZE caratteri per ogni campo
     sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
-    printf("Form: %s", formattedString);
     encryptFile(pathInfo, formattedString);
 
     unsigned char *buffer = decryptFile(pathInfo);
 
-    printf("Buffer: %s", buffer);
+    system("clear");
+
+    printf("\t\t\t\t\t ************ [*** GOODBYE! ***] ************ \n\n\n");
 
     close(server_sock);
 
@@ -1668,7 +1669,6 @@ void sendPubKey() {
     size_t pubkey_len = BIO_get_mem_data(bio, &pubkey_data);
 
     sendEncryptedPublicKey(server_sock, pubKey);
-
 }
 
 
@@ -1717,7 +1717,6 @@ void startEngine() {
 
     /* Verify the identity of the server */
     verifySelfSignedCertificate("../server/certificate.pem");
-
 
     printf("\n\n   ****************************************** WELCOME TO SECURE BANK  ******************************************\n\n");
 
@@ -1927,6 +1926,9 @@ int main() {
 
                 if (i == STDIN_FILENO) {
                     handle_cmd();
+                } else {
+                    // Richiesta di chiusura del server
+                    stop_executor();
                 }
             }
         }
