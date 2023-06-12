@@ -19,7 +19,6 @@ Transaction createTransaction(int trans_id, const char* account_num, float amoun
 Transaction createTransactionFromString(const char* transactionString);
 void addTransaction(Transaction transaction);
 int saveTransaction(unsigned char* received, ssize_t rec_len, unsigned char* transaction);
-void printDate(time_t currentTime);
 char* generateRandomString(int length);
 
 /** Encryption / Decryption Files Functions **/

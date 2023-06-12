@@ -1,12 +1,10 @@
 #include "server_protocol.h"
 
-const char* valid_cmds[] = { "showUsers",  "esc"};
-
-const char* help_msg =
-        "\n\n****************************************** SECURE BANK ******************************************\n\n"
-        "               !showUsers             --> mostra l’elenco dei peer registrati alla banca\n"
-        "               !esc                   --> termina il server\n";
-
+/**
+ * Function that creates a new Entry
+ * @param value the PeerInfo value allocated
+ * @return
+ */
 Entry* createEntry(PeerInfo* value) {
     Entry* entry = (Entry*)malloc(sizeof(Entry));
     entry->value = value;
@@ -14,18 +12,33 @@ Entry* createEntry(PeerInfo* value) {
     return entry;
 }
 
+/**
+ * Initialize the Entry list
+ * @return
+ */
 EntryList* createEntryList() {
     EntryList* list = (EntryList*)malloc(sizeof(EntryList));
     list->head = NULL;
     return list;
 }
 
+/**
+ * Insert the entry on top of the list
+ * @param list of entries
+ * @param value the new peer to insert
+ */
 void insertEntry(EntryList* list, PeerInfo* value) {
     Entry* newEntry = createEntry(value);
     newEntry->next = (struct Entry *) list->head;
     list->head = newEntry;
 }
 
+/**
+ * Finds the user by his/her username
+ * @param list where to search
+ * @param username of the user to find
+ * @return
+ */
 Entry* findEntryByUsername(EntryList* list, const char* username) {
     Entry* current = list->head;
     while (current != NULL) {
@@ -37,18 +50,12 @@ Entry* findEntryByUsername(EntryList* list, const char* username) {
     return NULL;
 }
 
-void printEntryList(EntryList* list) {
-    printf("\t\t\t\t\t     %-15s | %-10s\n", "Username", "Balance");
-    printf("\t\t\t\t\t     -----------------------\n");
-
-    Entry* current = list->head;
-    while (current != NULL) {
-        printf("\t\t\t\t\t     %-15s | %.2f€\n", current->value->username, current->value->balance);
-        current = (Entry*)current->next;
-    }
-}
-
-
+/**
+ * Finds the user by his/her key
+ * @param list where to search
+ * @param key of the user to find
+ * @return
+ */
 Entry* findEntryByKey(EntryList* list, int key) {
     Entry* current = list->head;
     while (current != NULL) {
@@ -60,6 +67,26 @@ Entry* findEntryByKey(EntryList* list, int key) {
     return NULL;
 }
 
+/**
+ * Prints the total list of the users registered
+ * @param list
+ */
+void printEntryList(EntryList* list) {
+    printf("\t\t\t\t\t     %-15s | %-10s\n", "Username", "Balance");
+    printf("\t\t\t\t\t     -----------------------\n");
+
+    Entry* current = list->head;
+    while (current != NULL) {
+        printf("\t\t\t\t\t     %-15s | %.2f€\n", current->value->username, current->value->balance);
+        current = (Entry*)current->next;
+    }
+}
+
+/**
+ * Removes one user from the list
+ * @param list where to search
+ * @param key to remove
+ */
 void removeEntryByKey(EntryList* list, int key) {
     Entry* current = list->head;
     Entry* prev = NULL;
@@ -83,11 +110,20 @@ void removeEntryByKey(EntryList* list, int key) {
     }
 }
 
+/**
+ * Function that print the error occurred
+ * @param error_message the error occurred during the function
+ */
 void handle_error(const char* error_message) {
     fprintf(stderr, "Error occurred: %s\n", error_message);
     exit(1);
 }
 
+/**
+ * Function that sends the public key in clear, without encryption
+ * @param socket of destination
+ * @param publicKey of the current user
+ */
 void sendPublicKey(int socket, EVP_PKEY* publicKey) {
     int bufferSize = i2d_PUBKEY(publicKey, NULL);
     if (bufferSize < 0) {
@@ -119,6 +155,11 @@ void sendPublicKey(int socket, EVP_PKEY* publicKey) {
     free(buffer);
 }
 
+/**
+ * Reads the private key from file
+ * @param filename path to the private key
+ * @return
+ */
 EVP_PKEY* readPrivateKeyFromPEM(const char* filename) {
     EVP_PKEY* privateKey = NULL;
     FILE* file = fopen(filename, "r");
@@ -133,6 +174,11 @@ EVP_PKEY* readPrivateKeyFromPEM(const char* filename) {
     return privateKey;
 }
 
+
+/**
+ * Print on standard output the public key
+ * @param key
+ */
 void printEvpKey(EVP_PKEY *key) {
     BIO *bio = BIO_new(BIO_s_mem());
     if (bio == NULL) {
@@ -153,6 +199,10 @@ void printEvpKey(EVP_PKEY *key) {
     BIO_free(bio);
 }
 
+/**
+ * Print on standard output the public key
+ * @param privateKey path to private key
+ */
 void printPrivateKey(const EVP_PKEY* privateKey) {
     if (privateKey == NULL) {
         printf("Invalid private key\n");
@@ -180,6 +230,12 @@ void printPrivateKey(const EVP_PKEY* privateKey) {
     BIO_free(bio);
 }
 
+/**
+ * Load the shared secret from file, used to decrypt the information stored at the registration phase
+ * and the transactions
+ * @param keyStore is the variable that contains the key to decrypt all the files
+ * @param keyPath path to key
+ */
 void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
     FILE* file = fopen(keyPath, "rb");
     if (file == NULL) {
@@ -192,7 +248,11 @@ void loadSharedSecretFromFile(unsigned char* keyStore, const char* keyPath) {
     fclose(file);
 }
 
-
+/**
+ * Function that generates the IV (Initialization Vector)
+ * @param iv the variabile that will contain the IV
+ * @param iv_len the IV length
+ */
 void generateRandomIV(unsigned char *iv, int iv_len) {
     if (RAND_bytes(iv, iv_len) != 1) {
         fprintf(stderr, "Errore durante la generazione dell'IV casuale.\n");
@@ -200,7 +260,12 @@ void generateRandomIV(unsigned char *iv, int iv_len) {
     }
 }
 
-
+/**
+ * Encrypt the file using the IV. It is used to encrypt the file with the help of keyStore
+ * @param ciphertext_file path where will be stored the file
+ * @param string the content that will be stored
+ * @param keyStore the key used to encrypt
+ */
 void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *keyStore) {
     unsigned char iv[EVP_MAX_IV_LENGTH];
     int iv_len = EVP_CIPHER_iv_length(EVP_aes_128_cbc());
@@ -208,7 +273,7 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
 
     FILE* cipher_file = fopen(ciphertext_file, "wb");
     if (!cipher_file) {
-        fprintf(stderr, "Errore: impossibile aprire il file '%s' (nessun permesso?)\n", ciphertext_file);
+        fprintf(stderr, "Error: Unable to open file '%s' (no permission?).\n", ciphertext_file);
         exit(1);
     }
 
@@ -216,13 +281,13 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
 
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
+        fprintf(stderr, "Error: EVP_CIPHER_CTX_new returned NULL\n");
         exit(1);
     }
 
     int ret = EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
     if (ret != 1) {
-        fprintf(stderr, "Errore: EncryptInit Failed\n");
+        fprintf(stderr, "Error: EncryptInit Failed\n");
         exit(1);
     }
 
@@ -231,7 +296,7 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
 
     ret = EVP_EncryptUpdate(ctx, out_buf, &num_bytes_written, string, strlen(string) - 1);
     if (ret != 1) {
-        fprintf(stderr, "Errore: EncryptUpdate Failed\n");
+        fprintf(stderr, "Error: EncryptUpdate Failed\n");
         exit(1);
     }
 
@@ -239,7 +304,7 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
 
     ret = EVP_EncryptFinal_ex(ctx, out_buf, &num_bytes_written);
     if (ret != 1) {
-        fprintf(stderr, "Errore: EncryptFinal Failed\n");
+        fprintf(stderr, "Error: EncryptFinal Failed\n");
         exit(1);
     }
 
@@ -249,10 +314,16 @@ void encryptFile(unsigned char* ciphertext_file, char *string, unsigned char *ke
     fclose(cipher_file);
 }
 
+/**
+ * Decrypt the file using the IV. It is used to decrypt the file with the help of keyStore
+ * @param ciphertext_file path to encrypted file
+ * @param keyStore key used to decrypt
+ * @return
+ */
 unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore) {
     FILE* cipher_file = fopen(ciphertext_file, "rb");
     if (!cipher_file) {
-        fprintf(stderr, "Errore: impossibile aprire il file '%s' (il file non esiste?)\n", ciphertext_file);
+        fprintf(stderr, "Error: unable to open file '%s' (file does not exist?).\n", ciphertext_file);
         exit(1);
     }
 
@@ -262,13 +333,13 @@ unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore)
 
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        fprintf(stderr, "Errore: EVP_CIPHER_CTX_new ha restituito NULL\n");
+        fprintf(stderr, "Error: EVP_CIPHER_CTX_new returned NULL\n");
         exit(1);
     }
 
     int ret = EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, keyStore, iv);
     if (ret != 1) {
-        fprintf(stderr, "Errore: DecryptInit Failed\n");
+        fprintf(stderr, "Error: DecryptInit Failed\n");
         exit(1);
     }
 
@@ -282,14 +353,14 @@ unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore)
     while ((num_bytes_read = fread(in_buf, 1, sizeof(in_buf), cipher_file)) > 0) {
         ret = EVP_DecryptUpdate(ctx, out_buf, &num_bytes_written, in_buf, num_bytes_read);
         if (ret != 1) {
-            fprintf(stderr, "Errore: DecryptUpdate Failed\n");
+            fprintf(stderr, "Error: DecryptUpdate Failed\n");
             exit(1);
         }
 
         size_t new_size = decrypted_size + num_bytes_written;
         unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
         if (new_decrypted_data == NULL) {
-            fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+            fprintf(stderr, "Error: unable to allocate memory for decrypted string\n");
             exit(1);
         }
 
@@ -301,14 +372,14 @@ unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore)
 
     ret = EVP_DecryptFinal_ex(ctx, out_buf, &num_bytes_written);
     if (ret != 1) {
-        fprintf(stderr, "Errore: DecryptFinal Failed\n");
+        fprintf(stderr, "Error: DecryptFinal Failed\n");
         exit(1);
     }
 
     size_t new_size = decrypted_size + num_bytes_written;
     unsigned char* new_decrypted_data = realloc(decrypted_data, new_size);
     if (new_decrypted_data == NULL) {
-        fprintf(stderr, "Errore: impossibile allocare memoria per la stringa decrittografata\n");
+        fprintf(stderr, "Error: unable to allocate memory for decrypted string\n");
         exit(1);
     }
 
@@ -323,7 +394,12 @@ unsigned char* decryptFile(const char* ciphertext_file, unsigned char* keyStore)
     return decrypted_data;
 }
 
-
+/**
+ * Converts the buffer in the public key format
+ * @param buffer contains the serialized public key
+ * @param bufferSize dimension of public key serialized
+ * @return public key
+ */
 EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
     unsigned char* bufferPtr = buffer;
 
@@ -336,6 +412,11 @@ EVP_PKEY* convertToPublicKey(unsigned char* buffer, int bufferSize) {
     return publicKey;
 }
 
+/**
+ * Reads the publick key from .pem file
+ * @param filename path to public key
+ * @return public key
+ */
 EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
     EVP_PKEY* publicKey = NULL;
     FILE* file = fopen(filename, "r");
@@ -350,6 +431,9 @@ EVP_PKEY* readPublicKeyFromPEM(const char* filename) {
     return publicKey;
 }
 
+/**
+ * Generated the public key using the certificate
+ */
 void generate_public_key() {
     X509* cert = NULL;
     EVP_PKEY* pubkey = NULL;
@@ -406,36 +490,36 @@ void generate_public_key() {
     if (cert) X509_free(cert);
 }
 
-X509* generateSelfSignedCertificate(EVP_PKEY* privateKey)
-{
+/**
+ * Generate the self-signed certificate using the private key
+ * @param privateKey of the server
+ * @return a new certificate
+ */
+X509* generateSelfSignedCertificate(EVP_PKEY* privateKey) {
     X509* cert = X509_new();
 
-    // Set certificate version
     X509_set_version(cert, 2);
 
-    // Generate random serial number for the certificate
     ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
 
-    // Set certificate validity period
     X509_gmtime_adj(X509_get_notBefore(cert), 0);
     X509_gmtime_adj(X509_get_notAfter(cert), 31536000L); // 1 year validity
 
-    // Set the subject name of the certificate (e.g., common name, organization, etc.)
     X509_NAME* name = X509_get_subject_name(cert);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char*)"Example Certificate", -1, -1, 0);
 
-    // Set the issuer name to be the same as the subject name for a self-signed certificate
     X509_set_issuer_name(cert, name);
 
-    // Set the public key of the certificate
     X509_set_pubkey(cert, privateKey);
 
-    // Sign the certificate with the private key
     X509_sign(cert, privateKey, EVP_sha256());
 
     return cert;
 }
 
+/**
+ * Function that generate and store the certificate and private key to file
+ */
 void generate_private_key_and_certificate() {
 
     // Generate a new RSA private key
@@ -462,12 +546,21 @@ void generate_private_key_and_certificate() {
     EVP_cleanup();
 }
 
+/**
+ * Function that initialize paths
+ */
 void initializePaths() {
     const char *directory = "../server";
     snprintf(pathPrivK, sizeof(pathPrivK), "%s/%s", directory, "private_key.pem");
     snprintf(pathPubK, sizeof(pathPubK), "%s/%s", directory, "public_key.pem");
 }
 
+/**
+ * Function that print data in hexadecimal format
+ * @param data to print
+ * @param data_len of data
+ * @param title what data represent
+ */
 void print_hex(const unsigned char* data, size_t data_len, const unsigned char* title) {
     printf("%s:\t", title);
 
@@ -477,6 +570,14 @@ void print_hex(const unsigned char* data, size_t data_len, const unsigned char* 
     printf("\n");
 }
 
+/**
+ * Function that calculates the HMAC based on the ciphertext
+ * @param data the ciphertext calculated before
+ * @param data_len the length of ciphertext
+ * @param key the shared secret obtained with Diffie-Hellman
+ * @param key_len the length of shared secret
+ * @param hmac the hmac calculated
+ */
 void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned char* key, size_t key_len, unsigned char* hmac) {
     HMAC_CTX* ctx = HMAC_CTX_new();
     if (ctx == NULL) {
@@ -499,6 +600,13 @@ void calculate_hmac(const unsigned char* data, size_t data_len, const unsigned c
     HMAC_CTX_free(ctx);
 }
 
+/**
+ * Function that encrypt a message that will be sent to the server
+ * @param plaintext the plaintext to encrypt
+ * @param plaintext_len the length of the plaintext
+ * @param ciphertext the new ciphertext generated
+ * @return
+ */
 size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, unsigned char* ciphertext) {
     // Generate a random IV
     unsigned char iv[16];
@@ -511,7 +619,7 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, uns
     if (RAND_bytes(nonce, 16) != 1) {
         handle_error("Failed to generate nonce");
     }
-    //print_hex(nonce, 16, "NONCE");
+
     // Create an encryption context
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
@@ -554,6 +662,18 @@ size_t encrypt_message(const unsigned char* plaintext, size_t plaintext_len, uns
     return ciphertext_len;
 }
 
+/**
+ * Function that is used in the receive and that extract the HMAC, IV and NONCE
+ * and calculate the length of the ciphertext
+ * @param ciphertext the ciphertext
+ * @param ciphertext_len the length of ciphertext
+ * @param iv the Inizialitazion Vector
+ * @param nonce the Nonce
+ * @param hmac the HMAC
+ * @param key the shared secret of DH
+ * @param key_len the length of DH shared secret
+ * @return
+ */
 int extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsigned char* iv, unsigned char* nonce, unsigned char* hmac, const unsigned char* key, size_t key_len) {
     size_t iv_offset = ciphertext_len - 16 - NONCE_SIZE - HMAC_SIZE;
     size_t nonce_offset = ciphertext_len - NONCE_SIZE - HMAC_SIZE;
@@ -578,6 +698,13 @@ int extract_values(const unsigned char* ciphertext, size_t ciphertext_len, unsig
     return result;
 }
 
+/**
+ * Function that decrypt a message, without using the digital signature
+ * @param ciphertext to decrypt
+ * @param ciphertext_len the length of ciphertext
+ * @param plaintext the decrypted text
+ * @return
+ */
 size_t decrypt_message(unsigned char* ciphertext, size_t ciphertext_len, unsigned char* plaintext) {
     // Extract the IV from the ciphertext
     unsigned char iv[16];
@@ -588,7 +715,7 @@ size_t decrypt_message(unsigned char* ciphertext, size_t ciphertext_len, unsigne
 
     int res = extract_values(ciphertext, ciphertext_len, iv, nonce, hmac, shared_secret, strlen(shared_secret));
     if (res != 0) {
-        handle_error("HMAC NON VALIDO");
+        handle_error("HMAC NOT VALID");
     }
 
     // Create a decryption context
@@ -621,6 +748,12 @@ size_t decrypt_message(unsigned char* ciphertext, size_t ciphertext_len, unsigne
     return plaintext_len;
 }
 
+/**
+ * Function that simply send a message
+ * @param socket the destination socket
+ * @param buffer the message
+ * @param buffer_len the length of message
+ */
 void sendMessage(int socket, unsigned char *buffer, int buffer_len) {
     int bytes_sent = send(socket, buffer, buffer_len, 0);
     if (bytes_sent < 0)
@@ -630,6 +763,10 @@ void sendMessage(int socket, unsigned char *buffer, int buffer_len) {
     }
 }
 
+/**
+ * Fix and generate the DH Parameters
+ * @return a new DH object containing p and g
+ */
 DH* create_dh_params() {
     DH* dh = DH_new();
     if (dh == NULL) {
@@ -658,7 +795,11 @@ DH* create_dh_params() {
 }
 
 
-
+/**
+ * Perform the exchange of public keys and the computation of the shared secret.
+ * It follows the algorithm of Diffie-Hellman
+ * @param client_socket the socket of the server
+ */
 void diffieHellman(int client_socket) {
     // Create DH parameters
     DH* dh = create_dh_params();
@@ -711,7 +852,7 @@ void diffieHellman(int client_socket) {
     int shared_secret_len = DH_compute_key(shared_secret, client_pub_key, dh);
 
     // Message to be sent
-    const char* message = "Hello, client!";
+    const char* message = "Diffie Hellman exchange done!";
     size_t message_len = strlen(message);
 
     // Buffer to hold the encrypted message
@@ -731,6 +872,14 @@ void diffieHellman(int client_socket) {
     DH_free(dh);
 }
 
+/**
+ * Function that sends a signed message
+ * @param socket the destination socket
+ * @param message the encrypted message to sign
+ * @param message_length the length of the message to sign
+ * @param signature the output signature
+ * @param signature_length the output signature length
+ */
 void send_signed_message(int socket, const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length) {
     size_t total_length = message_length + signature_length;
 
@@ -749,6 +898,15 @@ void send_signed_message(int socket, const unsigned char* message, size_t messag
     }
 }
 
+/**
+ * Function that, given a message, sign it
+ * @param message to sign
+ * @param message_length the message length
+ * @param private_key_path the path wehere to read the private key
+ * @param signature the new signature generated
+ * @param signature_length the new signature length generated
+ * @return error or not
+ */
 int sign_message(const unsigned char* message, size_t message_length, const char* private_key_path, unsigned char** signature, size_t* signature_length) {
 
     FILE* private_key_file = fopen(private_key_path, "rb");
@@ -825,6 +983,9 @@ int close_executor(char* arg) {
     return 0;
 }
 
+/**
+ * Function tha prints help menu
+ */
 void print_help() {
     printf("%s", help_msg);
 }
@@ -873,6 +1034,15 @@ int process_command(const char* cmd, char* arg) {
     return 1;
 }
 
+/**
+ * Function that, given a message, will verify the signature inside
+ * @param message encrypted
+ * @param message_length of the encrypted message
+ * @param signature of the message
+ * @param signature_length of the signature
+ * @param public_key of the server
+ * @return error or not
+ */
 int verify_signature(const unsigned char* message, size_t message_length, const unsigned char* signature, size_t signature_length,  EVP_PKEY* public_key) {
 
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
@@ -901,6 +1071,16 @@ int verify_signature(const unsigned char* message, size_t message_length, const 
     return 1;
 }
 
+/**
+ * Receive signed message and verify the signature
+ * @param socket from who receive the signature
+ * @param message the message received
+ * @param message_length the message length received
+ * @param signature the signature take from the message
+ * @param signature_length the signature length
+ * @param public_key the public key of the server
+ * @return error or not
+ */
 int receive_signed_message(int socket, unsigned char** message, size_t* message_length, unsigned char** signature, size_t* signature_length, EVP_PKEY* public_key) {
     int result;
     size_t max_length = BUFFER_SIZE + 256;
@@ -921,6 +1101,16 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     size_t total_length = (size_t)bytes_received;
     *signature_length = 256;
     *message_length = total_length - *signature_length;
+
+    /* Before calculating total_length, a check is added to see if the total size of the message
+     * received is less than the expected size of the signature field (*signature_length). If the message is too short,
+     * an error is printed and the function returns -1, thus avoiding a potential BUFFER OVERFLOW.
+     * */
+    if (total_length < *signature_length) {
+        fprintf(stderr, "Received message is too short\n");
+        free(signed_message);
+        return -1;
+    }
 
     *signature = (unsigned char*)malloc(*signature_length);
     if (*signature == NULL) {
@@ -945,6 +1135,10 @@ int receive_signed_message(int socket, unsigned char** message, size_t* message_
     return result;
 }
 
+/**
+ * Update the balance of the user, writing on the file the new information about the user
+ * @param peer the user
+ */
 void updateDestBalance(PeerInfo *peer) {
     unsigned char pathInfo[1024];
     unsigned char *folderpath = "../client/registered";
@@ -961,6 +1155,12 @@ void updateDestBalance(PeerInfo *peer) {
     encryptFile(pathInfo, formattedString, keyStore);
 }
 
+/**
+ * Function that verify the transaction is valid and sends back to the user the validity or not of the transaction
+ * @param username of destination, used to check if the user exists or not and to update his/her balance
+ * @param amount how much money to send
+ * @param sd the client socket
+ */
 void elaborateTransaction(unsigned char *username, float amount, int sd) {
     Entry* dest = findEntryByUsername(peerList, username);
     Entry* mitt = findEntryByKey(peerList, sd);
@@ -1024,85 +1224,10 @@ void elaborateTransaction(unsigned char *username, float amount, int sd) {
     }
 }
 
-EVP_PKEY* generate_keypair(const char* private_key_file, const char* public_key_file) {
-    EVP_PKEY* keypair = NULL;
-    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
-    FILE* private_key_fp = NULL;
-    FILE* public_key_fp = NULL;
-
-    if (ctx == NULL) {
-        fprintf(stderr, "Failed to create EVP_PKEY_CTX\n");
-        return NULL;
-    }
-
-    // Initialize the key generation context
-    if (EVP_PKEY_keygen_init(ctx) <= 0) {
-        fprintf(stderr, "Failed to initialize EVP_PKEY_CTX\n");
-        EVP_PKEY_CTX_free(ctx);
-        return NULL;
-    }
-
-    // Set the RSA key size
-    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0) {
-        fprintf(stderr, "Failed to set RSA key size\n");
-        EVP_PKEY_CTX_free(ctx);
-        return NULL;
-    }
-
-    // Generate the key pair
-    if (EVP_PKEY_keygen(ctx, &keypair) <= 0) {
-        fprintf(stderr, "Failed to generate key pair\n");
-        EVP_PKEY_CTX_free(ctx);
-        return NULL;
-    }
-
-    EVP_PKEY_CTX_free(ctx);
-
-    // Save the private key to file
-    private_key_fp = fopen(private_key_file, "wb");
-    if (private_key_fp == NULL) {
-        fprintf(stderr, "Failed to open private key file\n");
-        EVP_PKEY_free(keypair);
-        return NULL;
-    }
-    if (PEM_write_PrivateKey(private_key_fp, keypair, NULL, NULL, 0, NULL, NULL) != 1) {
-        fprintf(stderr, "Failed to write private key\n");
-        EVP_PKEY_free(keypair);
-        fclose(private_key_fp);
-        return NULL;
-    }
-    fclose(private_key_fp);
-
-    // Save the public key to file
-    public_key_fp = fopen(public_key_file, "wb");
-    if (public_key_fp == NULL) {
-        fprintf(stderr, "Failed to open public key file\n");
-        EVP_PKEY_free(keypair);
-        return NULL;
-    }
-    if (PEM_write_PUBKEY(public_key_fp, keypair) != 1) {
-        fprintf(stderr, "Failed to write public key\n");
-        EVP_PKEY_free(keypair);
-        fclose(public_key_fp);
-        return NULL;
-    }
-    fclose(public_key_fp);
-
-    EVP_PKEY* server_pubkey = readPublicKeyFromPEM(public_key_file);
-    if (server_pubkey == NULL) {
-        printf("Failed to read public key from file\n");
-        return NULL;
-    }
-
-    EVP_PKEY* server_privkey = readPrivateKeyFromPEM(private_key_file);
-    if (server_privkey == NULL) {
-        printf("Failed to read private key from file\n");
-        return NULL;
-    }
-
-    return keypair;
-}
-
+/**
+ * Function used to read at the beginning the information of all users from the file and to store them in the list
+ * @param parentFolder folder which contains all the users informations
+ */
 void readPeerInfoFromFolders(const char* parentFolder) {
     DIR* dir = opendir(parentFolder);
     if (dir == NULL) {
@@ -1135,13 +1260,13 @@ void readPeerInfoFromFolders(const char* parentFolder) {
         unsigned char *informationsUser;
         informationsUser = decryptFile(infoFilePath, keyStore);
         if (informationsUser == NULL) {
-            fprintf(stderr, "Errore: Impossibile decrittare le informazioni dell'utente\n");
+            fprintf(stderr, "Error: Unable to decrypt user information\n");
             exit(1);
         }
 
         PeerInfo* peerInfo = malloc(sizeof(PeerInfo));
         if (peerInfo == NULL) {
-            fprintf(stderr, "Errore: Impossibile allocare memoria per PeerInfo\n");
+            fprintf(stderr, "Error: Unable to allocate memory for PeerInfo\n");
             exit(1);
         }
 
@@ -1165,7 +1290,7 @@ void readPeerInfoFromFolders(const char* parentFolder) {
         int decimal;
 
         if (sscanf(token, "%d.%2d", &whole, &decimal) != 2) {
-            printf("Errore: Formato non valido.\n");
+            printf("Error: Invalid format.\n");
             return;
         }
 
@@ -1211,7 +1336,7 @@ int main() {
     printf("\t\t\t\t\t [*** SERVER PUBLIC KEY CREATED ***]\n\n\n");
 
     if ((master_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Errore nella creazione del socket");
+        perror("Error in socket creation");
         exit(EXIT_FAILURE);
     }
 
@@ -1225,12 +1350,12 @@ int main() {
     }
 
     if (bind(master_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("Errore nel binding del socket");
+        perror("Socket binding error");
         exit(EXIT_FAILURE);
     }
 
     if (listen(master_socket, 3) < 0) {
-        perror("Errore nella listen");
+        perror("Error in the listen");
         exit(EXIT_FAILURE);
     }
 
@@ -1267,14 +1392,14 @@ int main() {
         activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
 
         if ((activity < 0)) {
-            perror("Errore nella select");
+            perror("Error in select");
             exit(EXIT_FAILURE);
         }
 
 
         if (FD_ISSET(master_socket, &readfds)) {
             if ((new_socket = accept(master_socket, (struct sockaddr *) &address, (socklen_t *) &addrlen)) < 0) {
-                perror("Errore nell'accettazione della connessione");
+                perror("Error accepting connection");
                 exit(EXIT_FAILURE);
             }
 
@@ -1290,6 +1415,7 @@ int main() {
             sd = client_sockets[i];
 
             if (FD_ISSET(sd, &readfds)) {
+
                 if ((numBytesRead = recv(sd, buffer, BUFFER_SIZE, 0)) == 0) {
 
                     printf("\n\n\n\n\t\t\t\t   [  CLIENT (%d) DISCONNECTED ]\n\n", sd);
@@ -1298,8 +1424,9 @@ int main() {
 
                     close(sd);
                     client_sockets[i] = 0;
+
                 } else {
-                    printf("\n\n\n\n\t\t\t\t   [  MESSAGGIO DAL CLIENT (%d)  ]\n\n", sd);
+                    printf("\n\n\n\n\t\t\t\t   [  MESSAGE FROM CLIENT (%d)  ]\n\n", sd);
 
                     if (crypted) {
                         unsigned char decrypted_message[1024];
@@ -1315,7 +1442,7 @@ int main() {
 
                     if (atoi(&destination) == 1) {
 
-                        printf("\n\n\t\t\t\t    [ NUOVO PEER NELLA RETE ]\n\n");
+                        printf("\n\n\t\t\t\t    [ NEW PEER IN THE NETWORK ]\n\n");
 
                         const char* publicKeyFile = "../server/public_key.pem";
                         EVP_PKEY* server_pubkey = readPublicKeyFromPEM(publicKeyFile);

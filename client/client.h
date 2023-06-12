@@ -98,4 +98,16 @@ PeerInfo *mySelf;
 
 unsigned char keyStore[BUFFER_SIZE];
 
+const char* valid_cmds[] = {"sendMoney", "showBalance", "deposit","history", "stop"};
+
+const char* help_msg =
+        "\n\n   ****************************************** HOME ******************************************\n\n"
+        "\t!sendMoney           <DEST> <AMOUNT>     --> invia il denaro all'utente dest di amount con la virgola\n"
+        "\t!showBalance                             --> aggiunge una tupla al register corrente\n"
+        "\t!deposit             <AMOUNT>            --> ricarica il conto\n"
+        "\t!history                                 --> visualizza la storia passata delle transazioni\n"
+        "\t!stop                                    --> disconnette il peer dal network\n\n\n";
+
+
+
 #endif //SECUREBANK_CLIENT_H

@@ -61,6 +61,12 @@ unsigned char* shared_secret;
 /* If the communication is encrypted */
 int crypted = 0;
 
+const char* valid_cmds[] = { "showUsers",  "esc"};
+
+const char* help_msg =
+        "\n\n****************************************** SECURE BANK ******************************************\n\n"
+        "               !showUsers             --> mostra l’elenco dei peer registrati alla banca\n"
+        "               !esc                   --> termina il server\n";
 
 
 #endif //SECUREBANK_SERVER_H
