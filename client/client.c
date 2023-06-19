@@ -432,7 +432,6 @@ unsigned char* decryptFile(const char* ciphertext_file) {
     memcpy(new_decrypted_data + decrypted_size, out_buf, num_bytes_written);
 
     decrypted_data = new_decrypted_data;
-    decrypted_size = new_size;
 
     EVP_CIPHER_CTX_free(ctx);
 
@@ -1901,7 +1900,6 @@ void startEngine() {
 
         char* formattedString = (char*)malloc(5 * BUFFER_SIZE * sizeof(char)); // Assumendo una lunghezza massima di BUFFER_SIZE caratteri per ogni campo
         sprintf(formattedString, "%s:%s:%s:%s:%f", mySelf->nome, mySelf->cognome, mySelf->username, mySelf->password, mySelf->balance);
-        printf("Formatted String: %s", formattedString);
         encryptFile(pathInfo, formattedString);
 
     } else {
